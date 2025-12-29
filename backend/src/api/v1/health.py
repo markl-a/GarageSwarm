@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.dependencies import get_db, get_redis_client
 from src.config import get_settings, Settings
 from src.logging_config import get_logger
+from src.auth.dependencies import require_auth
+from src.models.user import User
 
 logger = get_logger(__name__)
 
@@ -34,40 +36,31 @@ async def health_check(
     Returns:
         {
             "status": "healthy",
-            "app": "Multi-Agent on the Web",
-            "version": "1.0.0",
-            "environment": "development",
-            "services": {
-                "database": "connected",
-                "redis": "connected"
-            }
+            "database": "connected",
+            "redis": "connected"
         }
     """
     health_status = {
         "status": "healthy",
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT,
-        "services": {},
     }
 
     # Check database connection
     try:
         await db.execute(text("SELECT 1"))
-        health_status["services"]["database"] = "connected"
+        health_status["database"] = "connected"
         logger.debug("Database health check passed")
     except Exception as e:
-        health_status["services"]["database"] = "disconnected"
+        health_status["database"] = "disconnected"
         health_status["status"] = "unhealthy"
         logger.error("Database health check failed", error=str(e))
 
     # Check Redis connection
     try:
         await redis_client.ping()
-        health_status["services"]["redis"] = "connected"
+        health_status["redis"] = "connected"
         logger.debug("Redis health check passed")
     except Exception as e:
-        health_status["services"]["redis"] = "disconnected"
+        health_status["redis"] = "disconnected"
         health_status["status"] = "unhealthy"
         logger.error("Redis health check failed", error=str(e))
 
@@ -143,6 +136,7 @@ async def detailed_health(
     db: AsyncSession = Depends(get_db),
     redis_client: redis.Redis = Depends(get_redis_client),
     settings: Settings = Depends(get_settings),
+    current_user: User = Depends(require_auth),
 ):
     """
     Detailed health check with full system information
