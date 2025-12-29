@@ -1,0 +1,23 @@
+# HTTP & WebSocket
+httpx==0.25.2
+websockets==12.0
+
+# AI Tool Integration
+anthropic==0.8.0
+google-generativeai==0.3.0
+
+# Resource Monitoring
+psutil==5.9.6
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.0
+pyyaml==6.0.1
+structlog==23.2.0
+aiofiles==23.2.1
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.12.0
+isort==5.13.0

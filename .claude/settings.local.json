@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(npx bmad-method@alpha install:*)",
+      "Bash(dir:*)",
+      "Bash(nul)",
+      "WebSearch",
+      "Bash(npx bmad-method@alpha install:ux-designer:*)",
+      "Bash(npx bmad-method@alpha:*)",
+      "Bash(git init:*)",
+      "Bash(pubspec.yaml)",
+      "Bash(README.md)",
+      "Bash(echo:*)",
+      "Bash(pubspec.yaml.tmp)",
+      "Bash(move /Y pubspec.yaml.tmp pubspec.yaml)",
+      "Bash(README.md.tmp)",
+      "Bash(move /Y README.md.tmp README.md)",
+      "Bash(alembic init:*)",
+      "Bash(cat:*)",
+      "Bash(python -m src.main:*)",
+      "WebFetch(domain:markets.financialcontent.com)",
+      "Bash(find:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(chmod:*)",
+      "Bash(docker-compose config:*)",
+      "Bash(python:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(pip install:*)",
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
+      "Bash(timeout:*)",
+      "Bash(ping:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

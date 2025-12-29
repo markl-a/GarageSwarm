@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: multi_agent_postgres
+    environment:
+      POSTGRES_DB: multi_agent_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - multi_agent_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: multi_agent_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - multi_agent_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: multi_agent_backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: dev-secret-key-change-in-production
+      DEBUG: "true"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Waiting for database...' &&
+        python -c 'import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; asyncio.run(create_async_engine(\"postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db\").dispose())'
+        echo 'Running database migrations...' &&
+        alembic upgrade head &&
+        echo 'Starting FastAPI server...' &&
+        uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    networks:
+      - multi_agent_network
+
+  # Worker agent is optional in development
+  # Uncomment to run worker agent in Docker
+  # worker-agent:
+  #   build:
+  #     context: ./worker-agent
+  #     dockerfile: Dockerfile.dev
+  #   container_name: multi_agent_worker
+  #   environment:
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  #     GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+  #   volumes:
+  #     - ./worker-agent:/app
+  #   depends_on:
+  #     - backend
+  #   command: python src/main.py --config config/agent.yaml
+  #   networks:
+  #     - multi_agent_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  multi_agent_network:
+    driver: bridge

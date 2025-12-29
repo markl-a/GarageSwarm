@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  lint-backend:
+    name: Lint Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run black
+        run: |
+          cd backend
+          black --check src/ tests/
+
+      - name: Run isort
+        run: |
+          cd backend
+          isort --check-only src/ tests/
+
+      - name: Run pylint
+        run: |
+          cd backend
+          pylint src/ --disable=C0114,C0115,C0116,R0903
+        continue-on-error: true
+
+  lint-worker:
+    name: Lint Worker Agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd worker-agent
+          pip install -r requirements.txt
+
+      - name: Run black
+        run: |
+          cd worker-agent
+          black --check src/ tests/
+
+      - name: Run isort
+        run: |
+          cd worker-agent
+          isort --check-only src/ tests/
+
+      - name: Run pylint
+        run: |
+          cd worker-agent
+          pylint src/ --disable=C0114,C0115,C0116,R0903
+        continue-on-error: true
+
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key
+        run: |
+          cd backend
+          pytest --cov=src tests/ --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+        continue-on-error: true
+
+  test-worker:
+    name: Test Worker Agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd worker-agent
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          cd worker-agent
+          pytest --cov=src tests/ --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./worker-agent/coverage.xml
+          flags: worker
+          name: worker-coverage
+        continue-on-error: true
+
+  docker-build:
+    name: Test Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker-compose config --quiet
+
+      - name: Build backend image
+        run: docker-compose build backend
+
+      - name: Test backend starts
+        run: |
+          docker-compose up -d postgres redis
+          sleep 10
+          docker-compose up -d backend
+          sleep 10
+          docker-compose ps
+          docker-compose logs backend
