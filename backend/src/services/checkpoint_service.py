@@ -20,6 +20,7 @@ from src.models.subtask import Subtask
 from src.models.evaluation import Evaluation
 from src.services.redis_service import RedisService
 from src.schemas.checkpoint import CheckpointTriggerReason
+from src.schemas.subtask import SubtaskStatus
 from src.config import get_settings
 
 logger = structlog.get_logger()
@@ -88,7 +89,7 @@ class CheckpointService:
             subtask_result = await self.db.execute(
                 select(func.count(Subtask.subtask_id))
                 .where(Subtask.task_id == task_id)
-                .where(Subtask.status == "completed")
+                .where(Subtask.status == SubtaskStatus.COMPLETED.value)
             )
             completed_count = subtask_result.scalar()
 
@@ -161,7 +162,7 @@ class CheckpointService:
             subtasks_result = await self.db.execute(
                 select(Subtask.subtask_id)
                 .where(Subtask.task_id == task_id)
-                .where(Subtask.status == "completed")
+                .where(Subtask.status == SubtaskStatus.COMPLETED.value)
             )
             completed_subtask_ids = [str(row[0]) for row in subtasks_result.all()]
 
@@ -757,7 +758,7 @@ class CheckpointService:
             for subtask in task.subtasks:
                 subtask_id_str = str(subtask.subtask_id)
                 # If subtask is completed but NOT in checkpoint's completed list
-                if subtask.status == "completed" and subtask_id_str not in checkpoint_subtask_ids:
+                if subtask.status == SubtaskStatus.COMPLETED.value and subtask_id_str not in checkpoint_subtask_ids:
                     subtasks_to_reset.append(subtask)
 
             # Reset subtasks
@@ -936,7 +937,7 @@ class CheckpointService:
 
         for subtask in task.subtasks:
             subtask_id_str = str(subtask.subtask_id)
-            if subtask.status == "completed" and subtask_id_str not in checkpoint_subtask_ids:
+            if subtask.status == SubtaskStatus.COMPLETED.value and subtask_id_str not in checkpoint_subtask_ids:
                 subtasks_to_reset.append({
                     "subtask_id": subtask.subtask_id,
                     "name": subtask.name,

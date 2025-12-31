@@ -15,6 +15,7 @@ class SubtaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CORRECTING = "correcting"
+    CANCELLED = "cancelled"
 
 
 class SubtaskCreateRequest(BaseModel):

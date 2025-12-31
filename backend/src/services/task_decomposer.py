@@ -12,6 +12,8 @@ from src.models.task import Task
 from src.models.subtask import Subtask
 from src.services.redis_service import RedisService
 from src.exceptions import CycleDetectedError
+from src.schemas.task import TaskStatus
+from src.schemas.subtask import SubtaskStatus
 
 logger = structlog.get_logger()
 
@@ -357,7 +359,7 @@ class TaskDecomposer:
         subtasks = await self._create_subtasks(task, subtask_defs)
 
         # Update task status to initializing
-        task.status = "initializing"
+        task.status = TaskStatus.INITIALIZING.value
 
         # Store estimated subtask count in metadata
         if task.task_metadata is None:
@@ -523,7 +525,7 @@ class TaskDecomposer:
         result = await self.db.execute(
             select(Subtask)
             .where(Subtask.task_id == task_id)
-            .where(Subtask.status == "pending")
+            .where(Subtask.status == SubtaskStatus.PENDING.value)
         )
         pending_subtasks = result.scalars().all()
 
@@ -531,7 +533,7 @@ class TaskDecomposer:
         completed_result = await self.db.execute(
             select(Subtask.subtask_id)
             .where(Subtask.task_id == task_id)
-            .where(Subtask.status == "completed")
+            .where(Subtask.status == SubtaskStatus.COMPLETED.value)
         )
         completed_ids = {str(row[0]) for row in completed_result.fetchall()}
 
@@ -564,8 +566,8 @@ class TaskDecomposer:
             return False
 
         total = len(subtasks)
-        completed = sum(1 for s in subtasks if s.status == "completed")
-        failed = sum(1 for s in subtasks if s.status == "failed")
+        completed = sum(1 for s in subtasks if s.status == SubtaskStatus.COMPLETED.value)
+        failed = sum(1 for s in subtasks if s.status == SubtaskStatus.FAILED.value)
 
         # Calculate progress
         progress = int((completed / total) * 100) if total > 0 else 0
@@ -584,17 +586,17 @@ class TaskDecomposer:
 
         # Check completion status
         if failed > 0:
-            task.status = "failed"
+            task.status = TaskStatus.FAILED.value
             task.completed_at = datetime.utcnow()
             await self.db.commit()
-            await self.redis.set_task_status(task_id, "failed")
+            await self.redis.set_task_status(task_id, TaskStatus.FAILED.value)
             await self.redis.set_task_progress(task_id, progress)
             return True
         elif completed == total:
-            task.status = "completed"
+            task.status = TaskStatus.COMPLETED.value
             task.completed_at = datetime.utcnow()
             await self.db.commit()
-            await self.redis.set_task_status(task_id, "completed")
+            await self.redis.set_task_status(task_id, TaskStatus.COMPLETED.value)
             await self.redis.set_task_progress(task_id, 100)
             return True
         else:

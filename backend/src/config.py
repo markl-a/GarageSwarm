@@ -165,6 +165,7 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL
     LOG_FORMAT: str = "json"  # json | text
+    LOG_TTL_SECONDS: int = 3600  # Redis log TTL (1 hour)
 
     # API Keys (for evaluation framework)
     ANTHROPIC_API_KEY: Optional[str] = None

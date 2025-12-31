@@ -31,8 +31,10 @@ from src.schemas.log import (
     LogResponse
 )
 from src.services.redis_service import RedisService
+from src.config import get_settings
 
 router = APIRouter()
+settings = get_settings()
 logger = structlog.get_logger()
 
 
@@ -890,11 +892,11 @@ async def send_log(
             metadata=log_request.metadata
         )
 
-        # Store log in Redis with 1-hour TTL
+        # Store log in Redis with configurable TTL
         log_key = f"logs:{subtask.task_id}:{subtask_id}:{datetime.utcnow().timestamp()}"
         await redis_service.redis.setex(
             log_key,
-            3600,  # 1 hour TTL
+            settings.LOG_TTL_SECONDS,
             log_message.model_dump_json()
         )
 
@@ -905,7 +907,7 @@ async def send_log(
             {log_key: datetime.utcnow().timestamp()}
         )
         # Set TTL on the sorted set too
-        await redis_service.redis.expire(logs_set_key, 3600)
+        await redis_service.redis.expire(logs_set_key, settings.LOG_TTL_SECONDS)
 
         # Broadcast to WebSocket clients subscribed to the task
         ws_message = {

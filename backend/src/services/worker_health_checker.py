@@ -21,6 +21,7 @@ from src.models.worker import Worker
 from src.models.subtask import Subtask
 from src.services.redis_service import RedisService
 from src.config import settings
+from src.schemas.subtask import SubtaskStatus
 
 logger = structlog.get_logger()
 
@@ -159,7 +160,7 @@ class WorkerHealthChecker:
         subtask_result = await db.execute(
             select(Subtask)
             .where(Subtask.assigned_worker == worker_id)
-            .where(Subtask.status == "in_progress")
+            .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
         )
         orphaned_subtasks = subtask_result.scalars().all()
 

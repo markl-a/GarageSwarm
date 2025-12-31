@@ -16,6 +16,9 @@ from src.services.redis_service import RedisService
 from src.services.task_allocator import TaskAllocator
 from src.services.task_decomposer import TaskDecomposer
 from src.config import get_settings
+from src.schemas.task import TaskStatus
+from src.schemas.subtask import SubtaskStatus
+from src.schemas.worker import WorkerStatus
 
 logger = structlog.get_logger()
 
@@ -242,7 +245,7 @@ class TaskScheduler:
                 raise ValueError(f"Task {task_id} not found")
 
             # Check if task needs decomposition
-            if task.status == "pending":
+            if task.status == TaskStatus.PENDING.value:
                 await self.decomposer.decompose_task(task_id)
                 await self.db.refresh(task)
 
@@ -287,8 +290,8 @@ class TaskScheduler:
         for subtask in ready:
             if allocated >= remaining_capacity:
                 # System at capacity, queue remaining
-                if subtask.status == "pending":
-                    subtask.status = "queued"
+                if subtask.status == SubtaskStatus.PENDING.value:
+                    subtask.status = SubtaskStatus.QUEUED.value
                     await self.redis.push_to_queue(subtask.subtask_id)
                 queued += 1
                 continue
@@ -303,11 +306,11 @@ class TaskScheduler:
                 queued += 1
 
         # Update task status if it was initializing
-        if task.status == "initializing" and allocated > 0:
-            task.status = "in_progress"
+        if task.status == TaskStatus.INITIALIZING.value and allocated > 0:
+            task.status = TaskStatus.IN_PROGRESS.value
             task.started_at = datetime.utcnow()
             await self.db.commit()
-            await self.redis.set_task_status(task.task_id, "in_progress")
+            await self.redis.set_task_status(task.task_id, TaskStatus.IN_PROGRESS.value)
 
         return allocated, queued
 
@@ -317,7 +320,7 @@ class TaskScheduler:
         result = await self.db.execute(
             select(Task)
             .options(selectinload(Task.subtasks))  # Eager load subtasks
-            .where(Task.status.in_(["initializing", "in_progress"]))
+            .where(Task.status.in_([TaskStatus.INITIALIZING.value, TaskStatus.IN_PROGRESS.value]))
             .order_by(Task.created_at.asc())
         )
         return list(result.scalars().all())
@@ -333,7 +336,7 @@ class TaskScheduler:
         result = await self.db.execute(
             select(func.count())
             .select_from(Subtask)
-            .where(Subtask.status == "in_progress")
+            .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
         )
         return result.scalar() or 0
 
@@ -348,7 +351,7 @@ class TaskScheduler:
             # Get queued subtasks ordered by priority
             result = await self.db.execute(
                 select(Subtask)
-                .where(Subtask.status == "queued")
+                .where(Subtask.status == SubtaskStatus.QUEUED.value)
                 .where(Subtask.assigned_worker.is_(None))
                 .order_by(Subtask.priority.desc(), Subtask.created_at.asc())
                 .limit(MAX_CONCURRENT_SUBTASKS)
@@ -396,12 +399,12 @@ class TaskScheduler:
             self.db.execute(
                 select(func.count())
                 .select_from(Task)
-                .where(Task.status.in_(["initializing", "in_progress"]))
+                .where(Task.status.in_([TaskStatus.INITIALIZING.value, TaskStatus.IN_PROGRESS.value]))
             ),
             self.db.execute(
                 select(func.count())
                 .select_from(Worker)
-                .where(Worker.status.in_(["online", "idle"]))
+                .where(Worker.status.in_([WorkerStatus.ONLINE.value, WorkerStatus.IDLE.value]))
             )
         )
 
@@ -677,8 +680,8 @@ class TaskScheduler:
 
         result = await self.db.execute(
             select(
-                func.sum(case((Subtask.status == "completed", 1), else_=0)).label('completed'),
-                func.sum(case((Subtask.status == "failed", 1), else_=0)).label('failed')
+                func.sum(case((Subtask.status == SubtaskStatus.COMPLETED.value, 1), else_=0)).label('completed'),
+                func.sum(case((Subtask.status == SubtaskStatus.FAILED.value, 1), else_=0)).label('failed')
             )
             .where(Subtask.subtask_id.in_([s.subtask_id for s in ready_subtasks]))
         )
@@ -788,8 +791,8 @@ class TaskScheduler:
 
         # Calculate progress
         total = len(task.subtasks)
-        completed = sum(1 for s in task.subtasks if s.status == "completed")
-        failed = sum(1 for s in task.subtasks if s.status == "failed")
+        completed = sum(1 for s in task.subtasks if s.status == SubtaskStatus.COMPLETED.value)
+        failed = sum(1 for s in task.subtasks if s.status == SubtaskStatus.FAILED.value)
 
         progress = int((completed / total) * 100) if total > 0 else 0
 
@@ -798,13 +801,13 @@ class TaskScheduler:
 
         # Update status if needed
         if completed == total:
-            task.status = "completed"
+            task.status = TaskStatus.COMPLETED.value
             task.completed_at = datetime.utcnow()
         elif failed > 0 and (completed + failed) == total:
-            task.status = "failed"
+            task.status = TaskStatus.FAILED.value
             task.completed_at = datetime.utcnow()
-        elif task.status != "in_progress":
-            task.status = "in_progress"
+        elif task.status != TaskStatus.IN_PROGRESS.value:
+            task.status = TaskStatus.IN_PROGRESS.value
 
         await self.db.commit()
 

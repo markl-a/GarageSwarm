@@ -22,6 +22,7 @@ from src.models.evaluation import Evaluation
 from src.models.checkpoint import Checkpoint
 from src.models.correction import Correction
 from src.schemas.checkpoint import CheckpointTriggerReason
+from src.schemas.subtask import SubtaskStatus
 from src.services.checkpoint_service import CheckpointService
 from src.services.redis_service import RedisService
 from src.config import settings
@@ -224,7 +225,7 @@ class CheckpointTrigger:
         result = await self.db.execute(
             select(func.count(Subtask.subtask_id))
             .where(Subtask.task_id == task.task_id)
-            .where(Subtask.status == "completed")
+            .where(Subtask.status == SubtaskStatus.COMPLETED.value)
         )
         completed_count = result.scalar() or 0
 

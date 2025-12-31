@@ -22,6 +22,7 @@ from src.models.task import Task
 from src.models.worker import Worker
 from src.services.redis_service import RedisService
 from src.config import get_settings
+from src.schemas.subtask import SubtaskStatus
 
 logger = structlog.get_logger()
 
@@ -590,7 +591,7 @@ class ReviewService:
             }
 
             # Update status to indicate human review needed
-            original_subtask.status = "correcting"  # Use existing status
+            original_subtask.status = SubtaskStatus.CORRECTING.value
 
             await self.db.commit()
 

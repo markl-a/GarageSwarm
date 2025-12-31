@@ -12,6 +12,9 @@ from src.models.task import Task
 from src.models.subtask import Subtask
 from src.models.worker import Worker
 from src.services.redis_service import RedisService
+from src.schemas.task import TaskStatus
+from src.schemas.subtask import SubtaskStatus
+from src.schemas.worker import WorkerStatus
 
 logger = structlog.get_logger()
 
@@ -131,7 +134,7 @@ class AnalyticsService:
                 func.count(Subtask.subtask_id).label('completed_count')
             )
             .join(Subtask, Subtask.assigned_worker == Worker.worker_id)
-            .where(Subtask.status == "completed")
+            .where(Subtask.status == SubtaskStatus.COMPLETED.value)
             .group_by(Worker.worker_id, Worker.machine_name)
             .order_by(func.count(Subtask.subtask_id).desc())
             .limit(5)
@@ -149,7 +152,7 @@ class AnalyticsService:
         total_completed = await self.db.execute(
             select(func.count())
             .select_from(Subtask)
-            .where(Subtask.status == "completed")
+            .where(Subtask.status == SubtaskStatus.COMPLETED.value)
         )
         completed_count = total_completed.scalar() or 0
         avg_tasks = (completed_count / total_workers) if total_workers > 0 else 0
@@ -193,7 +196,7 @@ class AnalyticsService:
             select(func.count())
             .select_from(Task)
             .where(Task.completed_at >= cutoff)
-            .where(Task.status == "completed")
+            .where(Task.status == TaskStatus.COMPLETED.value)
         )
         completed = result.scalar() or 0
 
@@ -331,7 +334,7 @@ class AnalyticsService:
                 .select_from(Task)
                 .where(Task.completed_at >= day_start)
                 .where(Task.completed_at < day_end)
-                .where(Task.status == "completed")
+                .where(Task.status == TaskStatus.COMPLETED.value)
             )
             completed = completed_result.scalar() or 0
 
@@ -340,7 +343,7 @@ class AnalyticsService:
                 .select_from(Task)
                 .where(Task.completed_at >= day_start)
                 .where(Task.completed_at < day_end)
-                .where(Task.status == "failed")
+                .where(Task.status == TaskStatus.FAILED.value)
             )
             failed = failed_result.scalar() or 0
 

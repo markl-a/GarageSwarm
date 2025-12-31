@@ -335,8 +335,8 @@ class TaskService:
         await self.db.execute(
             update(Subtask)
             .where(Subtask.task_id == task_id)
-            .where(Subtask.status.in_(["pending", "queued"]))
-            .values(status="cancelled")
+            .where(Subtask.status.in_([SubtaskStatus.PENDING.value, SubtaskStatus.QUEUED.value]))
+            .values(status=SubtaskStatus.CANCELLED.value)
         )
 
         await self.db.commit()
