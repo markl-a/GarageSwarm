@@ -19,6 +19,11 @@ from src.middleware.metrics import PrometheusMiddleware
 from src.middleware.request_id import RequestIDMiddleware
 from src.auth import set_redis_service
 from src.services.pool_monitor import PoolMonitor, set_pool_monitor
+from src.services.worker_health_checker import (
+    WorkerHealthChecker,
+    set_worker_health_checker,
+    get_worker_health_checker
+)
 
 # Import API routers
 from src.api.v1 import health
@@ -40,6 +45,9 @@ redis_client: RedisClient = None
 
 # Global pool monitor
 pool_monitor: PoolMonitor = None
+
+# Global worker health checker
+worker_health_checker: WorkerHealthChecker = None
 
 # Setup logging
 setup_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
@@ -108,12 +116,35 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Pool monitor initialization failed (non-critical)", error=str(e))
 
+    # Initialize worker health checker
+    global worker_health_checker
+    try:
+        from src.database import async_session_factory
+
+        worker_health_checker = WorkerHealthChecker(
+            session_factory=async_session_factory,
+            redis_service=redis_service,
+            check_interval=settings.WORKER_HEALTH_CHECK_INTERVAL if hasattr(settings, 'WORKER_HEALTH_CHECK_INTERVAL') else 30,
+            heartbeat_timeout=settings.WORKER_HEARTBEAT_TIMEOUT if hasattr(settings, 'WORKER_HEARTBEAT_TIMEOUT') else 120
+        )
+        set_worker_health_checker(worker_health_checker)
+
+        # Start background health checking
+        await worker_health_checker.start()
+        logger.info("✓ Worker health checker started")
+    except Exception as e:
+        logger.warning("Worker health checker initialization failed (non-critical)", error=str(e))
+
     logger.info("✓ All services initialized successfully")
 
     yield
 
     # Shutdown
     logger.info("Shutting down Multi-Agent on the Web API")
+
+    # Stop worker health checker
+    if worker_health_checker:
+        await worker_health_checker.stop()
 
     # Stop pool monitor
     if pool_monitor:

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, and_
 from sqlalchemy.orm import selectinload
 import structlog
 
@@ -12,6 +12,7 @@ from src.models.task import Task
 from src.models.subtask import Subtask
 from src.services.redis_service import RedisService
 from src.schemas.task import TaskStatus, CheckpointFrequency, PrivacyLevel
+from src.exceptions import OptimisticLockError, NotFoundError
 
 logger = structlog.get_logger()
 
@@ -185,47 +186,94 @@ class TaskService:
         self,
         task_id: UUID,
         status: str,
-        progress: Optional[int] = None
+        progress: Optional[int] = None,
+        expected_version: Optional[int] = None
     ) -> bool:
-        """Update task status
+        """Update task status with optimistic locking
 
         Args:
             task_id: Task UUID
             status: New status
             progress: Optional progress percentage
+            expected_version: Expected version for optimistic locking (optional)
+                             If provided, update will fail if version doesn't match
 
         Returns:
             bool: True if successful
 
         Raises:
-            ValueError: If task not found
+            NotFoundError: If task not found
+            OptimisticLockError: If version mismatch (concurrent modification)
         """
         logger.debug(
             "Updating task status",
             task_id=str(task_id),
             status=status,
-            progress=progress
+            progress=progress,
+            expected_version=expected_version
         )
 
+        # First, get the task to check existence and current version
         result = await self.db.execute(
             select(Task).where(Task.task_id == task_id)
         )
         task = result.scalar_one_or_none()
 
         if not task:
-            raise ValueError(f"Task {task_id} not found")
+            raise NotFoundError("Task", str(task_id))
 
-        # Update task record
-        task.status = status
+        current_version = task.version
+
+        # If expected_version provided, verify it matches
+        if expected_version is not None and current_version != expected_version:
+            raise OptimisticLockError(
+                "Task",
+                resource_id=str(task_id),
+                expected_version=expected_version,
+                current_version=current_version
+            )
+
+        # Build update values
+        update_values = {
+            "status": status,
+            "version": current_version + 1  # Always increment version
+        }
+
         if progress is not None:
-            task.progress = progress
+            update_values["progress"] = progress
 
         # Update timestamps based on status
         now = datetime.utcnow()
         if status == TaskStatus.IN_PROGRESS.value and task.started_at is None:
-            task.started_at = now
+            update_values["started_at"] = now
         elif status in [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value]:
-            task.completed_at = now
+            update_values["completed_at"] = now
+
+        # Perform update with version check (optimistic locking)
+        stmt = (
+            update(Task)
+            .where(and_(
+                Task.task_id == task_id,
+                Task.version == current_version  # Version check
+            ))
+            .values(**update_values)
+        )
+        result = await self.db.execute(stmt)
+
+        # Check if update succeeded (row count > 0)
+        if result.rowcount == 0:
+            # Version changed between read and write - concurrent modification
+            # Re-fetch to get current version for error message
+            refresh_result = await self.db.execute(
+                select(Task.version).where(Task.task_id == task_id)
+            )
+            new_version = refresh_result.scalar()
+            raise OptimisticLockError(
+                "Task",
+                resource_id=str(task_id),
+                expected_version=current_version,
+                current_version=new_version
+            )
 
         await self.db.commit()
 
@@ -243,6 +291,12 @@ class TaskService:
 
         # Invalidate task list cache when status changes
         await self.redis.invalidate_cache_pattern("tasks_list:*")
+
+        logger.debug(
+            "Task status updated",
+            task_id=str(task_id),
+            new_version=current_version + 1
+        )
 
         return True
 

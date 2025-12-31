@@ -1,7 +1,8 @@
 """Task Decomposer Service - Decomposes tasks into subtasks using rule-based engine"""
 
+from collections import defaultdict, deque
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set, Tuple
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,8 +11,114 @@ import structlog
 from src.models.task import Task
 from src.models.subtask import Subtask
 from src.services.redis_service import RedisService
+from src.exceptions import CycleDetectedError
 
 logger = structlog.get_logger()
+
+
+def detect_cycle_in_dag(
+    nodes: List[str],
+    dependencies: Dict[str, List[str]]
+) -> Tuple[bool, Optional[List[str]]]:
+    """
+    Detect cycles in a Directed Acyclic Graph using Kahn's algorithm.
+
+    Args:
+        nodes: List of node identifiers (subtask names or IDs)
+        dependencies: Dict mapping node -> list of nodes it depends on
+
+    Returns:
+        Tuple of (has_cycle, cycle_path)
+        - has_cycle: True if a cycle is detected
+        - cycle_path: List of nodes forming the cycle (if detected), None otherwise
+
+    Example:
+        nodes = ["A", "B", "C"]
+        dependencies = {"B": ["A"], "C": ["B"], "A": ["C"]}  # A->B->C->A cycle
+        has_cycle, path = detect_cycle_in_dag(nodes, dependencies)
+        # has_cycle = True, path = ["A", "C", "B", "A"]
+    """
+    # Build adjacency list (reverse direction: node -> dependents)
+    graph: Dict[str, List[str]] = defaultdict(list)
+    in_degree: Dict[str, int] = {node: 0 for node in nodes}
+
+    for node, deps in dependencies.items():
+        for dep in deps:
+            if dep in in_degree:  # Only count valid dependencies
+                graph[dep].append(node)
+                in_degree[node] += 1
+
+    # Kahn's algorithm - find nodes with no incoming edges
+    queue = deque([node for node, degree in in_degree.items() if degree == 0])
+    processed = []
+
+    while queue:
+        node = queue.popleft()
+        processed.append(node)
+
+        for dependent in graph[node]:
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                queue.append(dependent)
+
+    # If not all nodes processed, there's a cycle
+    if len(processed) != len(nodes):
+        # Find the cycle using DFS
+        remaining = set(nodes) - set(processed)
+        cycle_path = _find_cycle_path(remaining, dependencies)
+        return True, cycle_path
+
+    return False, None
+
+
+def _find_cycle_path(
+    nodes: Set[str],
+    dependencies: Dict[str, List[str]]
+) -> List[str]:
+    """
+    Find the actual cycle path using DFS.
+
+    Args:
+        nodes: Set of nodes that are part of cycle(s)
+        dependencies: Dependency mapping
+
+    Returns:
+        List of nodes forming one cycle
+    """
+    visited: Set[str] = set()
+    path: List[str] = []
+    path_set: Set[str] = set()
+
+    def dfs(node: str) -> Optional[List[str]]:
+        if node in path_set:
+            # Found cycle - extract it
+            cycle_start = path.index(node)
+            return path[cycle_start:] + [node]
+
+        if node in visited:
+            return None
+
+        visited.add(node)
+        path.append(node)
+        path_set.add(node)
+
+        for dep in dependencies.get(node, []):
+            if dep in nodes:
+                result = dfs(dep)
+                if result:
+                    return result
+
+        path.pop()
+        path_set.remove(node)
+        return None
+
+    for start_node in nodes:
+        if start_node not in visited:
+            result = dfs(start_node)
+            if result:
+                return result
+
+    return list(nodes)[:5]  # Fallback: return some cycle nodes
 
 
 # Subtask type definitions for different task types
@@ -297,7 +404,13 @@ class TaskDecomposer:
 
         Returns:
             List of created subtasks
+
+        Raises:
+            CycleDetectedError: If circular dependencies are detected
         """
+        # Validate DAG structure BEFORE creating any subtasks
+        self._validate_dag(subtask_defs)
+
         # First pass: create all subtasks with placeholder dependencies
         name_to_subtask: Dict[str, Subtask] = {}
         subtasks: List[Subtask] = []
@@ -342,6 +455,44 @@ class TaskDecomposer:
             await self.db.refresh(subtask)
 
         return subtasks
+
+    def _validate_dag(self, subtask_defs: List[Dict[str, Any]]) -> None:
+        """
+        Validate that subtask definitions form a valid DAG (no cycles).
+
+        Args:
+            subtask_defs: List of subtask definitions
+
+        Raises:
+            CycleDetectedError: If circular dependencies are detected
+        """
+        # Extract nodes and dependencies
+        nodes = [subtask_def["name"] for subtask_def in subtask_defs]
+        dependencies = {
+            subtask_def["name"]: subtask_def.get("dependencies", [])
+            for subtask_def in subtask_defs
+        }
+
+        # Check for self-dependencies
+        for name, deps in dependencies.items():
+            if name in deps:
+                raise CycleDetectedError(
+                    message=f"Subtask '{name}' depends on itself",
+                    cycle_path=[name, name]
+                )
+
+        # Check for cycles using Kahn's algorithm
+        has_cycle, cycle_path = detect_cycle_in_dag(nodes, dependencies)
+
+        if has_cycle:
+            logger.error(
+                "Circular dependency detected in subtask DAG",
+                cycle_path=cycle_path
+            )
+            raise CycleDetectedError(
+                message="Circular dependency detected in subtask definitions",
+                cycle_path=cycle_path
+            )
 
     def _enhance_description(self, base_description: str, task_description: str) -> str:
         """

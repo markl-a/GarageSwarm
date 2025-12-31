@@ -405,6 +405,151 @@ class RedisService:
         """
         return await self.redis.lindex("task_queue:pending", 0)
 
+    # Lua script for atomic pop-and-assign operation
+    # This prevents race conditions where multiple workers could grab the same subtask
+    _ATOMIC_POP_AND_ASSIGN_SCRIPT = """
+    -- KEYS[1] = pending queue key
+    -- KEYS[2] = in_progress set key
+    -- KEYS[3] = worker assignment key pattern prefix
+    -- ARGV[1] = worker_id
+    -- ARGV[2] = assignment TTL in seconds
+
+    -- Pop from queue
+    local subtask_id = redis.call('LPOP', KEYS[1])
+
+    if not subtask_id then
+        return nil
+    end
+
+    -- Add to in-progress set
+    redis.call('SADD', KEYS[2], subtask_id)
+
+    -- Set worker assignment with TTL
+    local assignment_key = KEYS[3] .. subtask_id
+    redis.call('SETEX', assignment_key, ARGV[2], ARGV[1])
+
+    return subtask_id
+    """
+
+    # Lua script for atomic requeue operation
+    # Moves subtask back to queue if worker fails
+    _ATOMIC_REQUEUE_SCRIPT = """
+    -- KEYS[1] = pending queue key
+    -- KEYS[2] = in_progress set key
+    -- KEYS[3] = assignment key
+    -- ARGV[1] = subtask_id
+
+    -- Remove from in-progress
+    redis.call('SREM', KEYS[2], ARGV[1])
+
+    -- Delete assignment
+    redis.call('DEL', KEYS[3])
+
+    -- Add back to front of queue (high priority requeue)
+    redis.call('LPUSH', KEYS[1], ARGV[1])
+
+    return 1
+    """
+
+    async def atomic_pop_and_assign(
+        self,
+        worker_id: UUID,
+        assignment_ttl: int = 600
+    ) -> Optional[str]:
+        """
+        Atomically pop a subtask from queue and assign to worker.
+
+        This operation is atomic - no race conditions possible:
+        1. Pops subtask from pending queue
+        2. Adds to in-progress set
+        3. Records worker assignment with TTL
+
+        Args:
+            worker_id: Worker UUID to assign subtask to
+            assignment_ttl: TTL for assignment record (default: 10 minutes)
+
+        Returns:
+            Subtask UUID as string, or None if queue is empty
+        """
+        try:
+            result = await self.redis.eval(
+                self._ATOMIC_POP_AND_ASSIGN_SCRIPT,
+                3,  # number of keys
+                "task_queue:pending",
+                "task_queue:in_progress",
+                "subtask:assignment:",
+                str(worker_id),
+                str(assignment_ttl)
+            )
+
+            if result:
+                subtask_id = result.decode() if isinstance(result, bytes) else result
+                logger.debug(
+                    f"Atomically assigned subtask {subtask_id} to worker {worker_id}"
+                )
+                return subtask_id
+            return None
+
+        except Exception as e:
+            logger.error(f"Atomic pop and assign failed: {e}")
+            raise
+
+    async def atomic_requeue(self, subtask_id: UUID) -> bool:
+        """
+        Atomically requeue a subtask (e.g., when worker fails).
+
+        This operation is atomic:
+        1. Removes from in-progress set
+        2. Deletes worker assignment
+        3. Adds back to front of queue
+
+        Args:
+            subtask_id: Subtask UUID to requeue
+
+        Returns:
+            True if requeued successfully
+        """
+        try:
+            result = await self.redis.eval(
+                self._ATOMIC_REQUEUE_SCRIPT,
+                3,  # number of keys
+                "task_queue:pending",
+                "task_queue:in_progress",
+                f"subtask:assignment:{subtask_id}",
+                str(subtask_id)
+            )
+
+            logger.debug(f"Atomically requeued subtask {subtask_id}")
+            return result == 1
+
+        except Exception as e:
+            logger.error(f"Atomic requeue failed: {e}")
+            raise
+
+    async def get_subtask_assignment(self, subtask_id: UUID) -> Optional[str]:
+        """
+        Get the worker currently assigned to a subtask.
+
+        Args:
+            subtask_id: Subtask UUID
+
+        Returns:
+            Worker UUID as string, or None if not assigned
+        """
+        result = await self.redis.get(f"subtask:assignment:{subtask_id}")
+        if result:
+            return result.decode() if isinstance(result, bytes) else result
+        return None
+
+    async def clear_subtask_assignment(self, subtask_id: UUID) -> None:
+        """
+        Clear subtask assignment (when subtask completes).
+
+        Args:
+            subtask_id: Subtask UUID
+        """
+        await self.redis.delete(f"subtask:assignment:{subtask_id}")
+
     async def mark_in_progress(self, subtask_id: UUID) -> None:
         """Add subtask to in-progress set"""
         await self.redis.sadd("task_queue:in_progress", str(subtask_id))

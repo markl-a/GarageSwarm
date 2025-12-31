@@ -15,7 +15,7 @@ class ErrorCode(str, Enum):
     Standardized error codes for client-side handling.
 
     Format: CATEGORY_SPECIFIC_ERROR
-    Categories: AUTH, RESOURCE, VALIDATION, SERVICE, TASK, RATE, TIMEOUT
+    Categories: AUTH, RESOURCE, VALIDATION, SERVICE, TASK, RATE, TIMEOUT, DATA
     """
     # Authentication errors (1xxx)
     AUTH_UNAUTHORIZED = "AUTH_001"
@@ -27,6 +27,10 @@ class ErrorCode(str, Enum):
     RESOURCE_NOT_FOUND = "RESOURCE_001"
     RESOURCE_CONFLICT = "RESOURCE_002"
     RESOURCE_ALREADY_EXISTS = "RESOURCE_003"
+    RESOURCE_VERSION_CONFLICT = "RESOURCE_004"
+
+    # Data integrity errors (25xx)
+    DATA_CYCLE_DETECTED = "DATA_025"
 
     # Validation errors (3xxx)
     VALIDATION_FAILED = "VALIDATION_001"
@@ -374,6 +378,76 @@ class TaskInvalidStateError(AppException):
             message,
             status_code=400,
             error_code=ErrorCode.TASK_INVALID_STATE,
+            details=details
+        )
+
+
+class OptimisticLockError(AppException):
+    """
+    Optimistic lock conflict error
+
+    Raised when a concurrent modification is detected during update.
+    The resource was modified by another process between read and write.
+    Returns HTTP 409. This is a retryable error.
+
+    Example:
+        raise OptimisticLockError(
+            "Task",
+            task_id="123e4567-e89b-12d3-a456-426614174000",
+            expected_version=1,
+            current_version=2
+        )
+    """
+    def __init__(
+        self,
+        resource: str,
+        resource_id: str = None,
+        expected_version: int = None,
+        current_version: int = None
+    ):
+        details = {"resource": resource}
+        if resource_id:
+            details["resource_id"] = resource_id
+        if expected_version is not None:
+            details["expected_version"] = expected_version
+        if current_version is not None:
+            details["current_version"] = current_version
+
+        super().__init__(
+            f"{resource} was modified by another process. Please refresh and retry.",
+            status_code=409,
+            error_code=ErrorCode.RESOURCE_VERSION_CONFLICT,
+            details=details,
+            retryable=True,
+            retry_after=1
+        )
+
+
+class CycleDetectedError(AppException):
+    """
+    Dependency cycle detected error
+
+    Raised when a circular dependency is detected in task/subtask DAG.
+    Returns HTTP 400.
+
+    Example:
+        raise CycleDetectedError(
+            cycle_path=["subtask_a", "subtask_b", "subtask_c", "subtask_a"]
+        )
+    """
+    def __init__(
+        self,
+        message: str = "Circular dependency detected",
+        cycle_path: list = None
+    ):
+        details = {}
+        if cycle_path:
+            details["cycle_path"] = cycle_path
+
+        super().__init__(
+            message,
+            status_code=400,
+            error_code=ErrorCode.DATA_CYCLE_DETECTED,
             details=details
         )
 
