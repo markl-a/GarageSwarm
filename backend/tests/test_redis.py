@@ -2,38 +2,32 @@
 Redis Service Tests
 
 Test Redis connection, operations, and Pub/Sub functionality.
+Uses FakeRedis for testing without requiring a real Redis server.
 """
 
 import asyncio
 import pytest
+import pytest_asyncio
 from uuid import uuid4
 
-from src.redis_client import RedisClient
 from src.services.redis_service import RedisService
 
 
-@pytest.fixture
-async def redis_client():
-    """Fixture for Redis client"""
-    client = RedisClient("redis://localhost:6379/1")  # Use DB 1 for tests
-    await client.connect()
-    yield client
-    # Cleanup
-    await client.client.flushdb()  # Clear test database
-    await client.close()
-
-
-@pytest.fixture
-async def redis_service(redis_client):
-    """Fixture for Redis service"""
-    return RedisService(redis_client.client)
+@pytest_asyncio.fixture
+async def redis_service(fake_redis_client):
+    """Fixture for Redis service using fake Redis client"""
+    service = RedisService(fake_redis_client)
+    yield service
+    # Cleanup - clear all data after each test
+    await fake_redis_client.flushdb()
 
 
 @pytest.mark.asyncio
-async def test_redis_connection(redis_client):
+async def test_redis_connection(fake_redis_client):
     """Test Redis connection"""
-    assert redis_client.is_connected()
-    assert await redis_client.ping()
+    # Test that fake Redis client responds to ping
+    result = await fake_redis_client.ping()
+    assert result is True
 
 
 @pytest.mark.asyncio
