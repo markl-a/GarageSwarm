@@ -92,6 +92,7 @@ class Worker(Base):
 
     # Relationships
     subtasks = relationship("Subtask", back_populates="worker")
+    proposals = relationship("Proposal", back_populates="worker")
 
     def __repr__(self):
         return f"<Worker(worker_id={self.worker_id}, machine_name={self.machine_name}, status={self.status})>"

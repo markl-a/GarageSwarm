@@ -13,6 +13,8 @@ from .checkpoint import Checkpoint
 from .correction import Correction
 from .evaluation import Evaluation
 from .activity_log import ActivityLog
+from .proposal import Proposal, ProposalVote
+from .template import WorkflowTemplate, TemplateStep
 
 __all__ = [
     "Base",
@@ -25,4 +27,8 @@ __all__ = [
     "Correction",
     "Evaluation",
     "ActivityLog",
+    "Proposal",
+    "ProposalVote",
+    "WorkflowTemplate",
+    "TemplateStep",
 ]

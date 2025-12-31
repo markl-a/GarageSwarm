@@ -6,10 +6,13 @@ High-level Redis operations for Multi-Agent platform.
 
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+import asyncio
 
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError, TimeoutError, RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,45 @@ class RedisService:
             redis_client: Async Redis client instance
         """
         self.redis = redis_client
+        self._max_retries = 3
+        self._retry_delay = 0.5  # 500ms base delay
+
+    async def _execute_with_retry(self, operation, *args, **kwargs):
+        """
+        Execute Redis operation with retry logic
+
+        Args:
+            operation: Redis operation to execute
+            *args, **kwargs: Arguments for the operation
+
+        Returns:
+            Operation result
+
+        Raises:
+            RedisError: If all retries fail
+        """
+        last_error = None
+        for attempt in range(self._max_retries):
+            try:
+                return await operation(*args, **kwargs)
+            except (ConnectionError, TimeoutError) as e:
+                last_error = e
+                if attempt < self._max_retries - 1:
+                    delay = self._retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(
+                        f"Redis operation failed (attempt {attempt + 1}/{self._max_retries}), "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        f"Redis operation failed after {self._max_retries} attempts: {e}"
+                    )
+            except RedisError as e:
+                logger.error(f"Redis error: {e}")
+                raise
+
+        raise last_error
 
     # ==================== Worker Status Management ====================
 
@@ -231,6 +273,39 @@ class RedisService:
 
     # ==================== Task Queue Operations ====================
 
+    async def add_task_to_queue(self, task_id: UUID) -> None:
+        """
+        Add task to main task queue (FIFO)
+
+        Args:
+            task_id: Task UUID
+        """
+        await self.redis.rpush("task_queue:main", str(task_id))
+        logger.debug(f"Task {task_id} added to main queue")
+
+    async def remove_task_from_queue(self, task_id: UUID) -> int:
+        """
+        Remove task from main task queue
+
+        Args:
+            task_id: Task UUID
+
+        Returns:
+            Number of removed elements
+        """
+        removed = await self.redis.lrem("task_queue:main", 0, str(task_id))
+        logger.debug(f"Task {task_id} removed from main queue: {removed}")
+        return removed
+
+    async def get_main_queue_length(self) -> int:
+        """
+        Get main task queue length
+
+        Returns:
+            Number of tasks in main queue
+        """
+        return await self.redis.llen("task_queue:main")
+
     async def push_to_queue(self, subtask_id: UUID) -> None:
         """
         Add subtask to pending queue (FIFO)
@@ -282,6 +357,127 @@ class RedisService:
     async def get_in_progress_count(self) -> int:
         """Get count of in-progress subtasks"""
         return await self.redis.scard("task_queue:in_progress")
+
+    # ==================== Subtask Status Caching ====================
+
+    async def set_subtask_status(
+        self, subtask_id: UUID, status: str, ttl: int = 3600
+    ) -> None:
+        """
+        Set subtask status in Redis cache
+
+        Args:
+            subtask_id: Subtask UUID
+            status: Subtask status
+            ttl: Time-to-live in seconds (default: 1 hour)
+        """
+        await self.redis.setex(f"subtasks:{subtask_id}:status", ttl, status)
+
+    async def get_subtask_status(self, subtask_id: UUID) -> Optional[str]:
+        """
+        Get subtask status from Redis cache
+
+        Args:
+            subtask_id: Subtask UUID
+
+        Returns:
+            Subtask status string, or None if not found
+        """
+        return await self.redis.get(f"subtasks:{subtask_id}:status")
+
+    async def set_subtask_progress(
+        self, subtask_id: UUID, progress: int, ttl: int = 3600
+    ) -> None:
+        """
+        Set subtask progress in Redis cache
+
+        Args:
+            subtask_id: Subtask UUID
+            progress: Progress percentage (0-100)
+            ttl: Time-to-live in seconds
+        """
+        await self.redis.setex(f"subtasks:{subtask_id}:progress", ttl, progress)
+
+    async def get_subtask_progress(self, subtask_id: UUID) -> Optional[int]:
+        """
+        Get subtask progress from Redis cache
+
+        Args:
+            subtask_id: Subtask UUID
+
+        Returns:
+            Progress percentage, or None if not found
+        """
+        progress = await self.redis.get(f"subtasks:{subtask_id}:progress")
+        return int(progress) if progress else None
+
+    async def cache_subtask_realtime_data(
+        self,
+        subtask_id: UUID,
+        data: Dict[str, Any],
+        ttl: int = 2
+    ) -> None:
+        """
+        Cache subtask real-time data (status, progress) with short TTL
+
+        Args:
+            subtask_id: Subtask UUID
+            data: Dict with status, progress, etc.
+            ttl: Time-to-live in seconds (default: 2s for real-time)
+        """
+        data_str = {k: str(v) for k, v in data.items()}
+        await self.redis.hset(f"subtasks:{subtask_id}:realtime", mapping=data_str)
+        await self.redis.expire(f"subtasks:{subtask_id}:realtime", ttl)
+
+    async def get_subtask_realtime_data(
+        self, subtask_id: UUID
+    ) -> Optional[Dict[str, str]]:
+        """
+        Get subtask real-time data from cache
+
+        Args:
+            subtask_id: Subtask UUID
+
+        Returns:
+            Dict with real-time data, or None if not cached
+        """
+        data = await self.redis.hgetall(f"subtasks:{subtask_id}:realtime")
+        return dict(data) if data else None
+
+    async def get_multiple_subtask_statuses(
+        self, subtask_ids: List[UUID]
+    ) -> Dict[str, Optional[str]]:
+        """
+        Get multiple subtask statuses in batch
+
+        Args:
+            subtask_ids: List of subtask UUIDs
+
+        Returns:
+            Dict mapping subtask_id to status (or None if not cached)
+        """
+        if not subtask_ids:
+            return {}
+
+        pipeline = self.redis.pipeline()
+        for subtask_id in subtask_ids:
+            pipeline.get(f"subtasks:{subtask_id}:status")
+
+        results = await pipeline.execute()
+
+        # Decode bytes to string if needed
+        return {
+            str(subtask_id): (result.decode() if isinstance(result, bytes) else result)
+            for subtask_id, result in zip(subtask_ids, results)
+        }
+
+    async def delete_subtask_cache(self, subtask_id: UUID) -> None:
+        """Delete all subtask-related cache"""
+        await self.redis.delete(
+            f"subtasks:{subtask_id}:status",
+            f"subtasks:{subtask_id}:progress",
+            f"subtasks:{subtask_id}:realtime"
+        )
 
     # ==================== WebSocket Connection Management ====================
 
@@ -347,6 +543,112 @@ class RedisService:
         await pubsub.subscribe(*channels)
         logger.info(f"Subscribed to channels: {channels}")
         return pubsub
+
+    async def publish_websocket_message(self, task_id: UUID, message: Dict[str, Any]) -> int:
+        """
+        Publish WebSocket message to task channel
+
+        Args:
+            task_id: Task UUID
+            message: WebSocket message dict (will be JSON-serialized)
+
+        Returns:
+            Number of backend instances that received the message
+        """
+        channel = f"websocket:task:{task_id}"
+        message_json = json.dumps(message)
+        num_subscribers = await self.redis.publish(channel, message_json)
+        logger.debug(f"Published WebSocket message to {channel}: {num_subscribers} subscribers")
+        return num_subscribers
+
+    async def subscribe_to_task_channel(self, task_id: UUID, pubsub: redis.client.PubSub) -> None:
+        """
+        Subscribe to task-specific WebSocket channel
+
+        Args:
+            task_id: Task UUID
+            pubsub: PubSub object to subscribe with
+        """
+        channel = f"websocket:task:{task_id}"
+        await pubsub.subscribe(channel)
+        logger.debug(f"Subscribed to task channel: {channel}")
+
+    async def unsubscribe_from_task_channel(self, task_id: UUID, pubsub: redis.client.PubSub) -> None:
+        """
+        Unsubscribe from task-specific WebSocket channel
+
+        Args:
+            task_id: Task UUID
+            pubsub: PubSub object to unsubscribe with
+        """
+        channel = f"websocket:task:{task_id}"
+        await pubsub.unsubscribe(channel)
+        logger.debug(f"Unsubscribed from task channel: {channel}")
+
+    # ==================== Message Queue for Offline Clients ====================
+
+    async def queue_message_for_client(
+        self, client_id: str, message: Dict[str, Any], ttl: int = 3600
+    ) -> None:
+        """
+        Queue message for offline client
+
+        Args:
+            client_id: Client identifier
+            message: Message dict to queue
+            ttl: Time-to-live in seconds (default: 1 hour)
+        """
+        queue_key = f"websocket:queue:{client_id}"
+        message_json = json.dumps(message)
+
+        # Add to list (FIFO queue)
+        await self.redis.rpush(queue_key, message_json)
+
+        # Set TTL on the queue
+        await self.redis.expire(queue_key, ttl)
+
+        logger.debug(f"Queued message for offline client: {client_id}")
+
+    async def get_queued_messages(self, client_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all queued messages for a client
+
+        Args:
+            client_id: Client identifier
+
+        Returns:
+            List of queued messages
+        """
+        queue_key = f"websocket:queue:{client_id}"
+
+        # Get all messages from the queue
+        messages_json = await self.redis.lrange(queue_key, 0, -1)
+
+        # Delete the queue after retrieval
+        if messages_json:
+            await self.redis.delete(queue_key)
+
+        # Parse JSON messages
+        messages = []
+        for msg_json in messages_json:
+            try:
+                messages.append(json.loads(msg_json))
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse queued message: {msg_json}")
+
+        logger.debug(f"Retrieved {len(messages)} queued messages for client: {client_id}")
+        return messages
+
+    async def clear_client_queue(self, client_id: str) -> None:
+        """
+        Clear message queue for a client
+
+        Args:
+            client_id: Client identifier
+        """
+        queue_key = f"websocket:queue:{client_id}"
+        await self.redis.delete(queue_key)
+        logger.debug(f"Cleared message queue for client: {client_id}")
 
     async def publish_task_update(
         self, task_id: UUID, status: str, progress: int
@@ -484,3 +786,320 @@ class RedisService:
         count = await self.redis.get(key)
         current = int(count) if count else 0
         return max(0, limit - current)
+
+    # ==================== Query Result Caching ====================
+
+    async def cache_query_result(
+        self,
+        cache_key: str,
+        data: Any,
+        ttl: int = 300
+    ) -> None:
+        """
+        Cache database query results with TTL
+
+        Args:
+            cache_key: Unique cache key
+            data: Data to cache (will be JSON-serialized)
+            ttl: Time-to-live in seconds (default: 300s = 5 minutes)
+        """
+        try:
+            # Serialize data to JSON
+            data_json = json.dumps(data, default=str)
+            await self.redis.setex(f"query_cache:{cache_key}", ttl, data_json)
+            logger.debug(f"Cached query result: {cache_key}")
+        except Exception as e:
+            logger.warning(f"Failed to cache query result: {e}")
+
+    async def get_cached_query(self, cache_key: str) -> Optional[Any]:
+        """
+        Get cached query result
+
+        Args:
+            cache_key: Cache key
+
+        Returns:
+            Cached data (deserialized from JSON), or None if not found
+        """
+        try:
+            cached = await self.redis.get(f"query_cache:{cache_key}")
+            if cached:
+                # Decode bytes if needed
+                if isinstance(cached, bytes):
+                    cached = cached.decode()
+                return json.loads(cached)
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get cached query: {e}")
+            return None
+
+    async def invalidate_cache(self, cache_key: str) -> None:
+        """
+        Invalidate a specific cache entry
+
+        Args:
+            cache_key: Cache key to invalidate
+        """
+        await self.redis.delete(f"query_cache:{cache_key}")
+        logger.debug(f"Invalidated cache: {cache_key}")
+
+    async def invalidate_cache_pattern(self, pattern: str) -> int:
+        """
+        Invalidate all cache entries matching a pattern
+
+        Args:
+            pattern: Redis pattern (e.g., "tasks:*", "workers:*")
+
+        Returns:
+            Number of keys deleted
+        """
+        cursor = 0
+        deleted = 0
+
+        while True:
+            cursor, keys = await self.redis.scan(
+                cursor=cursor,
+                match=f"query_cache:{pattern}",
+                count=100
+            )
+
+            if keys:
+                deleted += await self.redis.delete(*keys)
+
+            if cursor == 0:
+                break
+
+        logger.debug(f"Invalidated {deleted} cache entries matching: {pattern}")
+        return deleted
+
+    async def cache_task_list(
+        self,
+        status: Optional[str],
+        limit: int,
+        offset: int,
+        tasks_data: List[Dict[str, Any]],
+        total: int,
+        ttl: int = 300
+    ) -> None:
+        """
+        Cache task list query results
+
+        Args:
+            status: Status filter (or None)
+            limit: Query limit
+            offset: Query offset
+            tasks_data: Serialized task data
+            total: Total count
+            ttl: Time-to-live in seconds
+        """
+        cache_key = f"tasks_list:{status or 'all'}:{limit}:{offset}"
+        cache_data = {
+            "tasks": tasks_data,
+            "total": total,
+            "cached_at": datetime.utcnow().isoformat()
+        }
+        await self.cache_query_result(cache_key, cache_data, ttl)
+
+    async def get_cached_task_list(
+        self,
+        status: Optional[str],
+        limit: int,
+        offset: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached task list query results
+
+        Args:
+            status: Status filter (or None)
+            limit: Query limit
+            offset: Query offset
+
+        Returns:
+            Cached task list data, or None if not found
+        """
+        cache_key = f"tasks_list:{status or 'all'}:{limit}:{offset}"
+        return await self.get_cached_query(cache_key)
+
+    async def cache_worker_list(
+        self,
+        status: Optional[str],
+        limit: int,
+        offset: int,
+        workers_data: List[Dict[str, Any]],
+        total: int,
+        ttl: int = 300
+    ) -> None:
+        """
+        Cache worker list query results
+
+        Args:
+            status: Status filter (or None)
+            limit: Query limit
+            offset: Query offset
+            workers_data: Serialized worker data
+            total: Total count
+            ttl: Time-to-live in seconds
+        """
+        cache_key = f"workers_list:{status or 'all'}:{limit}:{offset}"
+        cache_data = {
+            "workers": workers_data,
+            "total": total,
+            "cached_at": datetime.utcnow().isoformat()
+        }
+        await self.cache_query_result(cache_key, cache_data, ttl)
+
+    async def get_cached_worker_list(
+        self,
+        status: Optional[str],
+        limit: int,
+        offset: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached worker list query results
+
+        Args:
+            status: Status filter (or None)
+            limit: Query limit
+            offset: Query offset
+
+        Returns:
+            Cached worker list data, or None if not found
+        """
+        cache_key = f"workers_list:{status or 'all'}:{limit}:{offset}"
+        return await self.get_cached_query(cache_key)
+
+    async def get_multiple_worker_statuses(
+        self,
+        worker_ids: List[UUID]
+    ) -> Dict[str, Optional[str]]:
+        """
+        Get multiple worker statuses in batch
+
+        Args:
+            worker_ids: List of worker UUIDs
+
+        Returns:
+            Dict mapping worker_id to status (or None if not cached)
+        """
+        if not worker_ids:
+            return {}
+
+        pipeline = self.redis.pipeline()
+        for worker_id in worker_ids:
+            pipeline.get(f"workers:{worker_id}:status")
+
+        results = await pipeline.execute()
+
+        # Decode bytes to string if needed
+        return {
+            str(worker_id): (result.decode() if isinstance(result, bytes) else result)
+            for worker_id, result in zip(worker_ids, results)
+        }
+
+    # ==================== Token Blacklist (JWT Logout) ====================
+
+    async def blacklist_token(
+        self, token_hash: str, ttl: int = 86400
+    ) -> None:
+        """
+        Add token to blacklist (for logout functionality)
+
+        Uses Redis SET structure with TTL for distributed blacklist.
+        Token hash is stored instead of full token for security.
+        TTL should match or exceed token expiration time.
+
+        Args:
+            token_hash: SHA256 hash of the token
+            ttl: Time-to-live in seconds (default: 24 hours)
+        """
+        # Add to blacklist SET
+        await self.redis.sadd("token_blacklist:set", token_hash)
+
+        # Set individual TTL for this token using a separate key
+        await self.redis.setex(f"token_blacklist:{token_hash}", ttl, "1")
+
+        logger.debug(f"Token blacklisted (hash: {token_hash[:16]}...)")
+
+    async def is_token_blacklisted(self, token_hash: str) -> bool:
+        """
+        Check if token is blacklisted
+
+        Args:
+            token_hash: SHA256 hash of the token
+
+        Returns:
+            True if token is blacklisted, False otherwise
+        """
+        # Check if token exists in blacklist (using individual key with TTL)
+        result = await self.redis.exists(f"token_blacklist:{token_hash}")
+
+        # Clean up from SET if TTL expired
+        if result == 0:
+            await self.redis.srem("token_blacklist:set", token_hash)
+
+        return result > 0
+
+    async def add_to_blacklist_async(
+        self, token_hash: str, ttl: int = 86400
+    ) -> None:
+        """
+        Add token to blacklist using Redis SET structure (async)
+
+        Alias for blacklist_token() for API consistency.
+        Uses Redis SET for storage with individual TTLs per token.
+
+        Args:
+            token_hash: SHA256 hash of the token
+            ttl: Time-to-live in seconds (default: 24 hours)
+        """
+        await self.blacklist_token(token_hash, ttl)
+
+    async def is_blacklisted_async(self, token_hash: str) -> bool:
+        """
+        Check if token is blacklisted (async)
+
+        Alias for is_token_blacklisted() for API consistency.
+
+        Args:
+            token_hash: SHA256 hash of the token
+
+        Returns:
+            True if token is blacklisted, False otherwise
+        """
+        return await self.is_token_blacklisted(token_hash)
+
+    async def remove_expired_blacklist_entries(self) -> int:
+        """
+        Clean up expired blacklist entries (manual cleanup if needed)
+
+        Note: Redis TTL handles this automatically, but this can be used
+        for explicit cleanup.
+
+        Returns:
+            Number of expired entries removed (always 0 with Redis TTL)
+        """
+        # Redis handles expiration automatically via TTL
+        # This method exists for interface compatibility
+        return 0
+
+    async def get_blacklist_size(self) -> int:
+        """
+        Get approximate size of token blacklist
+
+        Returns:
+            Number of blacklisted tokens
+        """
+        cursor = 0
+        count = 0
+
+        while True:
+            cursor, keys = await self.redis.scan(
+                cursor=cursor,
+                match="token_blacklist:*",
+                count=100
+            )
+            count += len(keys)
+            if cursor == 0:
+                break
+
+        return count

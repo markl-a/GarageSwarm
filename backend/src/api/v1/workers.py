@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from src.dependencies import get_db, get_redis_service
+from src.auth.dependencies import require_auth
+from src.models.user import User
 from src.services.worker_service import WorkerService
 from src.services.redis_service import RedisService
 from src.schemas.worker import (
@@ -153,7 +155,8 @@ async def list_workers(
     status_filter: Optional[WorkerStatus] = Query(None, alias="status", description="Filter by worker status"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    worker_service: WorkerService = Depends(get_worker_service)
+    worker_service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_auth)
 ):
     """
     List all registered workers with optional filtering.
@@ -206,7 +209,8 @@ async def list_workers(
 )
 async def get_worker(
     worker_id: UUID,
-    worker_service: WorkerService = Depends(get_worker_service)
+    worker_service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_auth)
 ):
     """
     Get detailed information about a specific worker.

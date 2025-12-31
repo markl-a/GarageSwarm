@@ -14,10 +14,22 @@ from src.config import settings
 from src.database import init_db, close_db
 from src.logging_config import setup_logging, get_logger
 from src.redis_client import RedisClient
+from src.middleware.error_handler import register_exception_handlers
+from src.middleware.metrics import PrometheusMiddleware
+from src.auth import set_redis_service
 
 # Import API routers
 from src.api.v1 import health
 from src.api.v1 import workers
+from src.api.v1 import tasks
+from src.api.v1 import subtasks
+from src.api.v1 import websocket
+from src.api.v1 import checkpoints
+from src.api.v1 import evaluations
+from src.api.v1 import auth
+from src.api.v1 import metrics
+from src.api.v1 import templates
+from src.api.v1 import mobile_ui
 
 # Global Redis client
 redis_client: RedisClient = None
@@ -48,6 +60,7 @@ async def lifespan(app: FastAPI):
     global redis_client
     try:
         from src.redis_client import redis_client as rc
+        from src.services.redis_service import RedisService
 
         redis_client = RedisClient(
             settings.REDIS_URL, max_connections=settings.REDIS_MAX_CONNECTIONS
@@ -58,6 +71,11 @@ async def lifespan(app: FastAPI):
         import src.redis_client
 
         src.redis_client.redis_client = redis_client
+
+        # Initialize Redis service for token blacklist
+        redis_service = RedisService(redis_client.client)
+        set_redis_service(redis_service)
+        logger.info("✓ Token blacklist configured with Redis")
     except Exception as e:
         logger.error("Failed to initialize Redis", error=str(e))
         raise
@@ -90,34 +108,33 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
-# CORS Middleware
+# Prometheus Metrics Middleware (register first to capture all requests)
+app.add_middleware(PrometheusMiddleware)
+
+# CORS Middleware - Security hardened configuration
+# IMPORTANT: Do NOT use "*" for allow_methods or allow_headers
+# Use explicit lists for security compliance
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.CORS_ORIGINS,  # From environment variable
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Explicit allowed methods (NOT "*" for security)
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # Explicit allowed headers (NOT "*" for security)
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Request-ID",
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+    ],
+    expose_headers=["X-Request-ID"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
 
-
-# Exception handlers
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Global exception handler for unhandled exceptions"""
-    logger.error(
-        "Unhandled exception",
-        path=request.url.path,
-        method=request.method,
-        error=str(exc),
-        exc_info=True,
-    )
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": "Internal server error" if not settings.DEBUG else str(exc),
-            "path": request.url.path,
-        },
-    )
+# Register exception handlers
+register_exception_handlers(app)
 
 
 # Root endpoint
@@ -139,11 +156,16 @@ async def root():
 
 # API v1 routes
 app.include_router(health.router, prefix="/api/v1", tags=["Health"])
+app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
 app.include_router(workers.router, prefix="/api/v1", tags=["Workers"])
-# app.include_router(tasks.router, prefix="/api/v1", tags=["Tasks"])
-# app.include_router(subtasks.router, prefix="/api/v1", tags=["Subtasks"])
-# app.include_router(checkpoints.router, prefix="/api/v1", tags=["Checkpoints"])
-# app.include_router(evaluations.router, prefix="/api/v1", tags=["Evaluations"])
+app.include_router(tasks.router, prefix="/api/v1", tags=["Tasks"])
+app.include_router(subtasks.router, prefix="/api/v1", tags=["Subtasks"])
+app.include_router(websocket.router, prefix="/api/v1", tags=["WebSocket"])
+app.include_router(checkpoints.router, prefix="/api/v1", tags=["Checkpoints"])
+app.include_router(evaluations.router, prefix="/api/v1", tags=["Evaluations"])
+app.include_router(templates.router, prefix="/api/v1", tags=["Templates"])
+app.include_router(metrics.router, tags=["Metrics"])
+app.include_router(mobile_ui.router, prefix="/mobile", tags=["Mobile UI"])
 
 logger.info("FastAPI application configured", debug=settings.DEBUG)
 

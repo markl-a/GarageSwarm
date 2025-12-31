@@ -100,7 +100,7 @@ def upgrade() -> None:
             "privacy_level", sa.String(20), nullable=False, server_default="normal"
         ),
         sa.Column("tool_preferences", postgresql.JSONB, nullable=True),
-        sa.Column("metadata", postgresql.JSONB, nullable=True),
+        sa.Column("task_metadata", postgresql.JSONB, nullable=True),
         sa.Column("version", sa.Integer, nullable=False, server_default="0"),
         sa.Column(
             "created_at",

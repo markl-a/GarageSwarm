@@ -184,6 +184,9 @@ class WorkerService:
                 task_id=current_task
             )
 
+        # Invalidate worker list cache when status changes
+        await self.redis.invalidate_cache_pattern("workers_list:*")
+
         return True
 
     async def get_worker(self, worker_id: UUID) -> Optional[Worker]:
@@ -216,16 +219,24 @@ class WorkerService:
         Returns:
             tuple: (list of workers, total count)
         """
-        # Build query
-        query = select(Worker)
+        # Build query with eager loading to avoid N+1
+        from sqlalchemy.orm import selectinload
+
+        query = select(Worker).options(
+            selectinload(Worker.subtasks)  # Eager load current subtasks
+        )
 
         if status:
             query = query.where(Worker.status == status)
 
-        # Get total count
-        count_result = await self.db.execute(
-            select(func.count()).select_from(Worker)
-        )
+        # Order by last_heartbeat descending (most recent first)
+        query = query.order_by(Worker.last_heartbeat.desc().nulls_last())
+
+        # Get total count with same filter
+        count_query = select(func.count()).select_from(Worker)
+        if status:
+            count_query = count_query.where(Worker.status == status)
+        count_result = await self.db.execute(count_query)
         total = count_result.scalar()
 
         # Get paginated results

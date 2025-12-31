@@ -64,6 +64,14 @@ class Subtask(Base):
         comment="Dependency subtask IDs: [uuid1, uuid2]",
     )
 
+    # Subtask type for workflow management
+    subtask_type = Column(
+        String(50),
+        nullable=True,
+        index=True,
+        comment="Subtask type: code_generation | code_review | code_fix | test | documentation | analysis | deployment",
+    )
+
     # Tool assignment
     recommended_tool = Column(
         String(50),
@@ -128,6 +136,10 @@ class Subtask(Base):
         CheckConstraint(
             "complexity >= 1 AND complexity <= 5", name="chk_subtask_complexity"
         ),
+        CheckConstraint(
+            "subtask_type IS NULL OR subtask_type IN ('code_generation', 'code_review', 'code_fix', 'test', 'documentation', 'analysis', 'deployment')",
+            name="chk_subtask_type",
+        ),
     )
 
     # Relationships
@@ -139,6 +151,9 @@ class Subtask(Base):
     corrections = relationship("Correction", back_populates="subtask")
     activity_logs = relationship(
         "ActivityLog", back_populates="subtask", cascade="all, delete-orphan"
+    )
+    proposals = relationship(
+        "Proposal", back_populates="subtask", cascade="all, delete-orphan"
     )
 
     def __repr__(self):

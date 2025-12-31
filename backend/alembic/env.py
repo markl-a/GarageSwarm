@@ -14,7 +14,21 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 # Import all models to ensure they are registered with SQLAlchemy
-from src.models import Base, User, Worker, Task, Subtask, Checkpoint, Correction, Evaluation, ActivityLog
+from src.models import (
+    Base,
+    User,
+    Worker,
+    Task,
+    Subtask,
+    Checkpoint,
+    Correction,
+    Evaluation,
+    ActivityLog,
+    Proposal,
+    ProposalVote,
+    WorkflowTemplate,
+    TemplateStep,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
