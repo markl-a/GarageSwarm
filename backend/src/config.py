@@ -132,6 +132,19 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_TASKS: int = 100
     TASK_EXECUTION_TIMEOUT: int = 600  # 10 minutes
 
+    # Task Scheduler
+    MAX_CONCURRENT_SUBTASKS: int = 20  # System-wide limit for parallel subtasks
+    MAX_SUBTASKS_PER_WORKER: int = 1   # Per-worker subtask limit
+    SCHEDULER_INTERVAL_SECONDS: int = 30  # Scheduling loop interval
+
+    # Review Service
+    REVIEW_SCORE_THRESHOLD: float = 6.0  # Scores below this trigger auto-fix
+    MAX_REVIEW_FIX_CYCLES: int = 2  # Max review-fix cycles before escalation
+
+    # Rate Limiting
+    RATE_LIMIT_REQUESTS: int = 100  # Max requests per window
+    RATE_LIMIT_WINDOW: int = 60  # Window size in seconds
+
     # Checkpoint Auto-Trigger Configuration
     EVALUATION_SCORE_THRESHOLD: float = 7.0  # Trigger checkpoint if score < 7.0
     CHECKPOINT_SUBTASK_INTERVAL: int = 5  # Trigger after N subtasks complete

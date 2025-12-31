@@ -15,14 +15,15 @@ from src.models.worker import Worker
 from src.services.redis_service import RedisService
 from src.services.task_allocator import TaskAllocator
 from src.services.task_decomposer import TaskDecomposer
+from src.config import get_settings
 
 logger = structlog.get_logger()
 
-
-# Concurrency limits
-MAX_CONCURRENT_SUBTASKS = 20  # System-wide limit
-MAX_SUBTASKS_PER_WORKER = 1   # Per-worker limit
-SCHEDULER_INTERVAL_SECONDS = 30  # Default scheduling interval
+# Get settings for concurrency limits
+_settings = get_settings()
+MAX_CONCURRENT_SUBTASKS = _settings.MAX_CONCURRENT_SUBTASKS
+MAX_SUBTASKS_PER_WORKER = _settings.MAX_SUBTASKS_PER_WORKER
+SCHEDULER_INTERVAL_SECONDS = _settings.SCHEDULER_INTERVAL_SECONDS
 
 
 class TaskScheduler:

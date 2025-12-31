@@ -21,13 +21,14 @@ from src.models.subtask import Subtask
 from src.models.task import Task
 from src.models.worker import Worker
 from src.services.redis_service import RedisService
+from src.config import get_settings
 
 logger = structlog.get_logger()
 
-
-# Review configuration
-REVIEW_SCORE_THRESHOLD = 6.0  # Scores below this trigger auto-fix
-MAX_FIX_CYCLES = 2  # Maximum review-fix cycles before human escalation
+# Get settings for review configuration
+_settings = get_settings()
+REVIEW_SCORE_THRESHOLD = _settings.REVIEW_SCORE_THRESHOLD
+MAX_FIX_CYCLES = _settings.MAX_REVIEW_FIX_CYCLES
 REVIEW_DIMENSIONS = ["syntax", "style", "logic", "security", "readability"]
 
 

@@ -20,12 +20,13 @@ from src.models.subtask import Subtask
 from src.models.evaluation import Evaluation
 from src.services.redis_service import RedisService
 from src.schemas.checkpoint import CheckpointTriggerReason
+from src.config import get_settings
 
 logger = structlog.get_logger()
 
-
-# Maximum correction cycles before requiring human intervention
-MAX_CORRECTION_CYCLES = 3
+# Get settings for checkpoint configuration
+_settings = get_settings()
+MAX_CORRECTION_CYCLES = _settings.CHECKPOINT_MAX_CORRECTION_CYCLES
 
 
 class CheckpointService:

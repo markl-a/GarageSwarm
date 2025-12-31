@@ -85,55 +85,40 @@ def get_app_settings() -> Settings:
     return get_settings()
 
 
-# ==================== Authentication (Placeholder) ====================
+# ==================== Authentication ====================
+# Full JWT authentication is implemented in src/auth/dependencies.py
+# Re-export for convenience and backward compatibility
+
+from src.auth.dependencies import (
+    get_current_user as get_authenticated_user,
+    get_current_active_user,
+    require_auth,
+    optional_auth,
+)
 
 
-async def get_current_user(
+async def get_current_user_id(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[UUID]:
     """
-    Get current authenticated user (JWT validation)
+    Get current authenticated user ID (UUID only)
 
-    This is a placeholder for future authentication implementation.
-    Currently returns None (no authentication required).
-
-    Args:
-        credentials: JWT token from Authorization header
-        db: Database session
+    For full User object, use src.auth.dependencies.get_current_user
 
     Returns:
         User UUID if authenticated, None otherwise
-
-    Raises:
-        HTTPException: If token is invalid
     """
-    # TODO: Implement JWT validation in Sprint 2+
-    # For now, return None (no authentication)
-
-    if credentials is None:
-        # No token provided - allow anonymous access for now
-        return None
-
-    # Placeholder JWT validation
-    # token = credentials.credentials
-    # try:
-    #     payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    #     user_id = payload.get("sub")
-    #     if user_id is None:
-    #         raise HTTPException(status_code=401, detail="Invalid token")
-    #     return UUID(user_id)
-    # except jwt.JWTError:
-    #     raise HTTPException(status_code=401, detail="Invalid token")
-
-    return None
+    user = await get_authenticated_user(credentials, db)
+    return user.user_id if user else None
 
 
 async def require_authenticated_user(
-    current_user: Optional[UUID] = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
 ) -> UUID:
     """
-    Require authenticated user (raises 401 if not authenticated)
+    Require authenticated user and return UUID
 
     Usage:
         @router.post("/tasks")
@@ -142,25 +127,27 @@ async def require_authenticated_user(
         ):
             ...
     """
-    if current_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
+    user = await require_auth(
+        await get_current_active_user(
+            await get_authenticated_user(credentials, db)
         )
-    return current_user
+    )
+    return user.user_id
 
 
 # ==================== Rate Limiting ====================
 
 
 async def check_rate_limit(
-    user_id: Optional[UUID] = Depends(get_current_user),
+    user_id: Optional[UUID] = Depends(get_current_user_id),
     redis_service: RedisService = Depends(get_redis_service),
     settings: Settings = Depends(get_app_settings),
 ) -> None:
     """
     Check API rate limit for user
+
+    Rate limit is applied per-user with configurable limits from settings.
+    Anonymous users are not rate limited.
 
     Usage:
         @router.post("/tasks", dependencies=[Depends(check_rate_limit)])
@@ -168,14 +155,18 @@ async def check_rate_limit(
             ...
     """
     if user_id is None:
-        # Skip rate limiting for anonymous users (for now)
+        # Skip rate limiting for anonymous users
         return
 
-    # TODO: Get endpoint from request context
-    endpoint = "/api/v1/tasks"
+    # Use generic endpoint for rate limiting (per-user global limit)
+    endpoint = "api_request"
+
+    # Get rate limit settings (default: 100 requests per 60 seconds)
+    limit = getattr(settings, 'RATE_LIMIT_REQUESTS', 100)
+    window = getattr(settings, 'RATE_LIMIT_WINDOW', 60)
 
     within_limit = await redis_service.check_rate_limit(
-        user_id, endpoint, limit=100, window=60
+        user_id, endpoint, limit=limit, window=window
     )
 
     if not within_limit:
