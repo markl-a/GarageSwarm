@@ -227,8 +227,21 @@ async def upload_subtask_result(
 
         if request.status == SubtaskStatus.COMPLETED:
             subtask.progress = 100
+            logger.info(
+                "Subtask completed successfully",
+                subtask_id=str(subtask_id),
+                task_id=str(subtask.task_id),
+                execution_time=request.execution_time
+            )
         elif request.status == SubtaskStatus.FAILED:
             subtask.progress = 0  # Reset progress on failure
+            logger.warning(
+                "Subtask failed",
+                subtask_id=str(subtask_id),
+                task_id=str(subtask.task_id),
+                error=request.error,
+                execution_time=request.execution_time
+            )
 
         # Store execution time in output metadata
         if subtask.output:

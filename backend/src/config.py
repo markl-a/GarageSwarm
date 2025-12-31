@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     MAX_SUBTASKS_PER_WORKER: int = 1   # Per-worker subtask limit
     SCHEDULER_INTERVAL_SECONDS: int = 30  # Scheduling loop interval
 
+    # Task Allocator
+    MAX_QUEUE_ALLOCATION_ATTEMPTS: int = 100  # Safety limit for queue reallocation loop
+    ALLOCATION_BATCH_SIZE: int = 50  # Max subtasks to allocate per batch
+
+    # Database Query
+    DB_QUERY_TIMEOUT_SECONDS: int = 30  # Timeout for database queries
+
     # Review Service
     REVIEW_SCORE_THRESHOLD: float = 6.0  # Scores below this trigger auto-fix
     MAX_REVIEW_FIX_CYCLES: int = 2  # Max review-fix cycles before escalation

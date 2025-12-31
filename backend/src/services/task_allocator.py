@@ -12,8 +12,10 @@ from src.models.task import Task
 from src.models.subtask import Subtask
 from src.models.worker import Worker
 from src.services.redis_service import RedisService
+from src.config import get_settings
 
 logger = structlog.get_logger()
+settings = get_settings()
 
 
 # Scoring weights for worker selection
@@ -177,7 +179,7 @@ class TaskAllocator:
         allocations = []
 
         # Process queue one by one until empty or no more can be allocated
-        max_attempts = 100  # Safety limit to prevent infinite loop
+        max_attempts = settings.MAX_QUEUE_ALLOCATION_ATTEMPTS
         attempts = 0
 
         while attempts < max_attempts:

@@ -610,6 +610,20 @@ async def batch_cancel_tasks(
                 message="Cancelled"
             ))
             successful += 1
+        except NotFoundError:
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=False,
+                error="Task not found"
+            ))
+            failed += 1
+        except ValidationError as e:
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=False,
+                error=str(e.message) if hasattr(e, 'message') else str(e)
+            ))
+            failed += 1
         except ValueError as e:
             results.append(BatchOperationResult(
                 task_id=task_id,
@@ -618,10 +632,17 @@ async def batch_cancel_tasks(
             ))
             failed += 1
         except Exception as e:
+            # Log unexpected errors but don't expose details to client
+            logger.error(
+                "Unexpected error in batch cancel",
+                task_id=str(task_id),
+                error=str(e),
+                error_type=type(e).__name__
+            )
             results.append(BatchOperationResult(
                 task_id=task_id,
                 success=False,
-                error=f"Unexpected error: {str(e)}"
+                error="Internal error occurred"
             ))
             failed += 1
 

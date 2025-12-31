@@ -20,6 +20,11 @@ logger = get_logger(__name__)
 engine_kwargs = {
     "echo": settings.DEBUG,  # Log SQL queries in debug mode
     "pool_pre_ping": True,  # Verify connections before using
+    # Connection timeout settings for asyncpg
+    "connect_args": {
+        "timeout": settings.DB_QUERY_TIMEOUT_SECONDS,  # Connection timeout
+        "command_timeout": settings.DB_QUERY_TIMEOUT_SECONDS,  # Query timeout
+    },
 }
 
 if settings.DEBUG:
@@ -29,6 +34,8 @@ else:
     # Use connection pooling in production
     engine_kwargs["pool_size"] = 20
     engine_kwargs["max_overflow"] = 40
+    # Pool timeout for waiting for a connection
+    engine_kwargs["pool_timeout"] = settings.DB_QUERY_TIMEOUT_SECONDS
 
 engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 
