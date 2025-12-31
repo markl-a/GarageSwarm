@@ -42,11 +42,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: dev-secret-key-change-in-production
+      SECRET_KEY: dev-secret-key-at-least-32-characters-long-for-security
       DEBUG: "true"
       PYTHONUNBUFFERED: "1"
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8080","http://localhost:5555","http://127.0.0.1:5555"]'
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - ./backend:/app
     depends_on:
@@ -57,7 +58,7 @@ services:
     command: >
       sh -c "
         echo 'Waiting for database...' &&
-        python -c 'import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; asyncio.run(create_async_engine(\"postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db\").dispose())'
+        python -c 'import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; asyncio.run(create_async_engine(\"postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db\").dispose())' &&
         echo 'Running database migrations...' &&
         alembic upgrade head &&
         echo 'Starting FastAPI server...' &&

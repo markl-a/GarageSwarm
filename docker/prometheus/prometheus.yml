@@ -1,0 +1,148 @@
+# Prometheus Configuration for Multi-Agent on the Web
+#
+# This configuration defines scrape targets for collecting metrics from
+# the FastAPI backend application.
+
+global:
+  # How frequently to scrape targets by default
+  scrape_interval: 15s
+
+  # How long until a scrape request times out
+  scrape_timeout: 10s
+
+  # How frequently to evaluate rules
+  evaluation_interval: 15s
+
+  # External labels to attach to any time series or alerts
+  external_labels:
+    cluster: 'multi-agent-on-the-web'
+    environment: 'development'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Rule files for alerts and recording rules
+# rule_files:
+#   - 'alerts.yml'
+#   - 'recording_rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus-server'
+          application: 'prometheus'
+
+  # FastAPI Backend Application
+  - job_name: 'multi-agent-backend'
+
+    # Scrape interval override (optional)
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+    # Metrics path
+    metrics_path: '/metrics'
+
+    # HTTP scheme (http or https)
+    scheme: 'http'
+
+    # Static configuration (for development)
+    static_configs:
+      - targets:
+          - 'backend:8000'  # Docker service name
+          # For local development without Docker:
+          # - 'localhost:8000'
+        labels:
+          instance: 'backend-1'
+          application: 'multi-agent-on-the-web'
+          component: 'backend'
+          environment: 'development'
+
+    # Additional HTTP settings
+    # basic_auth:
+    #   username: 'prometheus'
+    #   password: 'secure_password'
+
+    # TLS configuration (for HTTPS)
+    # tls_config:
+    #   insecure_skip_verify: false
+    #   ca_file: '/etc/prometheus/certs/ca.crt'
+
+    # Relabeling rules (optional)
+    relabel_configs:
+      # Add source labels
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'backend:8000'
+
+  # PostgreSQL Exporter (optional - if using postgres_exporter)
+  # - job_name: 'postgresql'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+  #       labels:
+  #         instance: 'postgres-db'
+  #         application: 'postgresql'
+
+  # Redis Exporter (optional - if using redis_exporter)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+  #       labels:
+  #         instance: 'redis-cache'
+  #         application: 'redis'
+
+  # Node Exporter (optional - for system metrics)
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+  #       labels:
+  #         instance: 'worker-node-1'
+  #         application: 'node-exporter'
+
+  # Service Discovery for Kubernetes (example)
+  # - job_name: 'kubernetes-pods'
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+  #       action: keep
+  #       regex: true
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+  #       action: replace
+  #       target_label: __metrics_path__
+  #       regex: (.+)
+  #     - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+  #       action: replace
+  #       regex: ([^:]+)(?::\d+)?;(\d+)
+  #       replacement: $1:$2
+  #       target_label: __address__
+
+# Storage configuration
+# storage:
+#   tsdb:
+#     path: '/prometheus/data'
+#     retention:
+#       time: 15d
+#       size: 50GB
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: 'http://remote-storage:9201/write'
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 10
+#       max_samples_per_send: 5000
+
+# Remote read configuration (optional)
+# remote_read:
+#   - url: 'http://remote-storage:9201/read'

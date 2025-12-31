@@ -1,66 +1,86 @@
 # Multi-Agent on the Web
 
-**分布式多Agent編排平台** - 協調多個AI工具（Claude Code, Gemini, Ollama）跨分布式機器執行，實現2-3x速度提升和4層質量保證。
+**Distributed Multi-Agent Orchestration Platform** - Coordinate multiple AI agents (Claude Code, Gemini, Ollama) across distributed machines to achieve 2-3x speed improvement and 4-layer quality assurance.
 
-## 項目概覽
+## Project Overview
 
-Multi-Agent on the Web 是一個革命性的分布式多Agent編排平台，讓開發者能夠：
+Multi-Agent on the Web is a revolutionary distributed multi-agent orchestration platform that enables developers to:
 
-- 🚀 **並行執行** - 將任務分解並分配給多台機器，實現2-3x速度提升
-- 🤝 **Agent協作** - 多個Agent互相審查、並行工作、投票決策
-- 🔍 **4層質量保證** - Agent互審 + 人工檢查點 + 投票機制 + 評估框架
-- 📊 **實時可視化** - 看到所有Agent和機器的實時狀態
-- 🎯 **半自動化** - 在關鍵決策點保持人工控制
+- 🚀 **Parallel Execution** - Decompose tasks and distribute across multiple machines for 2-3x speed improvement
+- 🤝 **Agent Collaboration** - Multiple agents review each other's work, collaborate in parallel, and vote on decisions
+- 🔍 **4-Layer Quality Assurance** - Agent peer review + Human checkpoints + Voting mechanism + Evaluation framework
+- 📊 **Real-time Visualization** - Monitor all agents and machines with live status updates
+- 🎯 **Semi-Automated** - Maintain human control at critical decision points
 
-## 核心特性
+## Core Features
 
-### 1. 分布式Worker管理
-- 支持10+台機器作為Worker
-- 實時資源監控（CPU、內存、磁盤）
-- 自動故障轉移和重試
+### 1. Distributed Worker Management
+- Support for 10+ machines as workers
+- Real-time resource monitoring (CPU, memory, disk)
+- Automatic failover and retry mechanisms
+- Heartbeat-based health monitoring
 
-### 2. 智能任務協調
-- LLM驅動的任務分解（含備援規則模板）
-- 智能任務分配（工具匹配50% + 資源30% + 隱私20%）
-- DAG依賴管理和並行調度
+### 2. Intelligent Task Orchestration
+- Rule-based task decomposition with 6 task type templates
+- Smart task allocation (tool matching 50% + resources 30% + privacy 20%)
+- DAG dependency management and parallel scheduling
+- Automatic subtask dependency resolution
 
-### 3. 多AI工具集成
-- **Claude Code** - MCP協議整合
-- **Gemini CLI** - Google AI SDK
-- **Local LLM (Ollama)** - 隱私敏感任務
+### 3. Multi-AI Tool Integration
+- **Claude Code** - MCP protocol integration for advanced coding
+- **Gemini CLI** - Google AI SDK for general tasks
+- **Local LLM (Ollama)** - Privacy-sensitive task execution
+- Tool preference system for optimal AI selection
 
-### 4. Agent協作與審查
-- Agent B審查Agent A的工作
-- 自動修復（最多3次循環）
-- 超過閾值自動上報人工
+### 4. Agent Collaboration & Review
+- Peer review: Agent B reviews Agent A's work
+- Automatic correction (up to 3 revision cycles)
+- Escalation to human review when quality threshold exceeded
+- Multi-agent voting for critical decisions
 
-### 5. 量化評估框架
-- **5維度評估**：Code Quality, Completeness, Security, Architecture Alignment, Testability
-- 自動化工具：pylint, ESLint, Bandit, radon
-- 評分 < 7.0 自動觸發checkpoint
+### 5. Quantitative Evaluation Framework
+- **5-Dimension Assessment**: Code Quality, Completeness, Security, Architecture Alignment, Testability
+- Automated tools: pylint, ESLint, Bandit, radon
+- Score < 7.0 automatically triggers checkpoint
+- Real-time quality tracking and reporting
 
-### 6. 人工檢查點與糾偏
-- 可配置檢查頻率（low/medium/high）
-- 評估驅動的智能觸發
-- 結構化糾偏反饋
+### 6. Human Checkpoint & Correction System
+- Configurable checkpoint frequency (low/medium/high)
+- Evaluation-driven intelligent triggering
+- Structured feedback with accept/correct/reject decisions
+- Contextual review with full work history
 
-## 技術架構
+## Technology Stack
 
-### 前端
-- **Flutter 3.16+** - 跨平台UI（Desktop + Web）
-- **Riverpod** - 狀態管理
-- **Material Design 3** - 設計系統
+### Frontend
+- **Flutter 3.16+** - Cross-platform UI (Desktop + Web)
+- **Riverpod 2.4+** - State management
+- **Material Design 3** - Design system
+- **WebSocket Client** - Real-time updates
 
-### 後端
-- **FastAPI 0.100+** - 異步API框架
-- **PostgreSQL 15+** - 主數據庫
-- **Redis 7+** - 實時狀態和緩存
-- **WebSocket** - 實時通信
+### Backend
+- **FastAPI 0.104+** - Async API framework with automatic OpenAPI docs
+- **PostgreSQL 15+** - Primary database with async support (asyncpg)
+- **Redis 7+** - Real-time state, caching, and message storage
+- **WebSocket** - Real-time bidirectional communication for log streaming
+- **Alembic** - Database migration management
+- **SQLAlchemy 2.0+** - Async ORM with declarative models
+- **Pydantic 2.5+** - Data validation and settings management
+- **python-jose** - JWT token handling
+- **passlib + bcrypt** - Password hashing
+- **structlog** - Structured logging
+- **prometheus-client** - Metrics and monitoring
 
 ### Worker Agent
 - **Python 3.11+** - Worker SDK
-- **asyncio** - 異步任務執行
-- **psutil** - 資源監控
+- **asyncio** - Asynchronous task execution
+- **psutil** - Resource monitoring (CPU, memory, disk)
+- **httpx** - Async HTTP client for API communication
+- **websockets** - WebSocket client for real-time communication
+- **anthropic** - Claude Code integration
+- **google-generativeai** - Gemini CLI integration
+- **pyyaml** - Configuration file parsing
+- **aiofiles** - Async file operations
 
 ## 項目結構
 
@@ -102,57 +122,104 @@ bmad-test/
 └── scripts/             # 工具腳本
 ```
 
-## 快速開始
+## Quick Start
 
-### 環境要求
+### Prerequisites
 
 - Docker 24+ & Docker Compose 2.23+
 - Python 3.11+
-- Flutter 3.16+ (可選，用於前端開發)
+- Flutter 3.16+ (optional, for frontend development)
 - Git
+- PostgreSQL 15+ (or use Docker)
+- Redis 7+ (or use Docker)
+- API keys for AI tools (Anthropic, Google, or Ollama)
 
-### 本地開發
+### Installation
 
-1. **克隆項目**
+1. **Clone the repository**
    ```bash
    git clone <repository-url>
    cd bmad-test
    ```
 
-2. **配置環境變量**
+2. **Configure environment variables**
    ```bash
-   cp backend/.env.example backend/.env
-   # 編輯 .env 填入必要的配置
+   cp .env.example .env
+   # Edit .env and add your API keys and settings
    ```
 
-3. **啟動所有服務**
+3. **Start all services**
    ```bash
-   make up
-   # 或
    docker-compose up -d
    ```
 
-4. **訪問服務**
-   - Backend API: http://localhost:8000
-   - API Docs: http://localhost:8000/docs
-   - Frontend: http://localhost:3000 (開發中)
-
-5. **查看日誌**
+4. **Verify services are running**
    ```bash
-   make logs
+   # Check health
+   curl http://localhost:8002/api/v1/health
+
+   # View API documentation
+   # Open: http://localhost:8002/docs
    ```
 
-### 運行 Worker Agent
+5. **View logs**
+   ```bash
+   docker-compose logs -f
+   ```
+
+### Running Worker Agent
 
 ```bash
 cd worker-agent
 
-# 配置 Worker
-cp config/agent.yaml.example config/agent.yaml
-# 編輯 config/agent.yaml 填入配置
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# 啟動 Worker
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure worker
+cp config/agent.yaml.example config/agent.yaml
+# Edit config/agent.yaml with your settings
+
+# Set API keys
+export ANTHROPIC_API_KEY="your-key"
+export GOOGLE_API_KEY="your-key"
+
+# Start worker
 python src/main.py --config config/agent.yaml
+```
+
+### Running Frontend (Optional)
+
+```bash
+cd frontend
+
+# Get dependencies
+flutter pub get
+
+# Run on web
+flutter run -d chrome
+
+# Or build for production
+flutter build web
+```
+
+### Creating Your First Task
+
+```bash
+# Submit a task via API
+curl -X POST http://localhost:8002/api/v1/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Create a simple REST API with user authentication",
+    "task_type": "develop_feature",
+    "checkpoint_frequency": "medium"
+  }'
+
+# Check task status
+curl http://localhost:8002/api/v1/tasks
 ```
 
 ## 開發指南
@@ -196,13 +263,29 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-## 文檔
+## Documentation
 
-- [架構設計](docs/architecture.md) - 完整的技術架構文檔
-- [產品需求文檔](docs/PRD.md) - PRD和功能需求
-- [Epic拆分](docs/epics.md) - 9個Epic，58個User Stories
-- [UX設計規範](docs/ux-design-specification.md) - UI/UX設計指南
-- [Sprint 1計劃](docs/sprint-1-plan.md) - 第一個Sprint的詳細計劃
+### User Documentation
+
+- **[Installation Guide](docs/installation.md)** - Detailed installation instructions for all components
+- **[User Guide](docs/user-guide.md)** - Complete tutorial on using the platform
+- **[API Reference](docs/api-reference.md)** - Full API documentation with examples
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+
+### Technical Documentation
+
+- **[Architecture Design](docs/architecture.md)** - Complete technical architecture
+- **[Database Schema](docs/database-schema.md)** - Database structure and relationships
+- **[Redis Schema](docs/redis-schema.md)** - Redis caching strategy
+- **[Error Handling Guide](docs/ERROR-HANDLING-GUIDE.md)** - Error handling patterns
+- **[Review Workflow Guide](docs/REVIEW-WORKFLOW-GUIDE.md)** - Agent review workflow
+
+### Project Documentation
+
+- **[Product Requirements](docs/PRD.md)** - Product requirements document
+- **[Epic Breakdown](docs/epics.md)** - 9 Epics, 58 User Stories
+- **[UX Design Specification](docs/ux-design-specification.md)** - UI/UX design guidelines
+- **[Sprint Plans](docs/sprint-1-plan.md)** - Sprint planning and execution
 
 ## 性能目標
 
@@ -231,20 +314,50 @@ alembic downgrade -1
 - [ ] Sprint 6-8: Quality & Collaboration (6-7 weeks)
 - [ ] Sprint 9: Testing & Launch (2-3 weeks)
 
-## 貢獻指南
+## Contributing
 
-請參閱 [CONTRIBUTING.md](CONTRIBUTING.md)（待創建）
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on:
 
-## 授權
+- Development environment setup
+- Code style guidelines
+- Testing requirements
+- Pull request process
+- Git commit conventions
 
-[待定]
+## License
 
-## 聯繫方式
+[To be determined]
 
-- **項目作者**: sir
-- **創建日期**: 2025-11-11
-- **當前狀態**: Sprint 1 開發中
+## Support
+
+- **Documentation**: [docs/README.md](docs/README.md)
+- **GitHub Issues**: Report bugs or request features
+- **GitHub Discussions**: Ask questions and share ideas
+
+## Project Information
+
+- **Author**: sir
+- **Created**: 2025-11-11
+- **Current Status**: Sprint 1 Development
+- **Version**: 1.0.0-beta
+
+## Acknowledgments
+
+Built with the BMAD-METHOD (Brainstorm → Mockup → Architect → Develop) for systematic product development.
+
+## Roadmap
+
+- ✅ Sprint 1-2: Foundation & Worker Management (Completed)
+- ✅ Epic 6: Agent Collaboration & Review (Completed)
+- ✅ Epic 9: Error Handling & Testing (Completed)
+- 🚀 Epic 10: Security & Stability (In Progress)
+- 📋 Sprint 3-4: Task Coordination & Flutter UI
+- 🤖 Sprint 5: AI Integration Enhancement
+- 🔍 Sprint 6-8: Advanced Quality & Collaboration
+- 🚢 Sprint 9: Production Launch
+
+For detailed roadmap, see [docs/epics.md](docs/epics.md)
 
 ---
 
-**Built with ❤️ using BMAD-METHOD**
+**Multi-Agent on the Web** - Orchestrate AI agents at scale

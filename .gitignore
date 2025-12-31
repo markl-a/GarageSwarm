@@ -194,3 +194,22 @@ $RECYCLE.BIN/
 # Project specific
 nul
 multi-agent-web/
+
+# Temporary summary/report files (prevent clutter)
+*-SUMMARY.md
+*-REPORT.md
+*_SUMMARY.md
+*_REPORT.md
+*-CHECKLIST.md
+*_CHECKLIST.md
+FINAL_REPORT.txt
+_ul
+
+# Temporary verification scripts
+verify_*.py
+validate_*.py
+test_*.json
+*.local.json
+
+# Claude settings (local only)
+.claude/settings.local.json

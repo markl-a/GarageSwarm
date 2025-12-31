@@ -1,0 +1,321 @@
+# Prometheus Alert Rules for Multi-Agent on the Web
+#
+# These rules define alerts that trigger when certain conditions are met.
+# Alerts can be forwarded to Alertmanager for notification management.
+
+groups:
+  # HTTP and API Alerts
+  - name: http_alerts
+    interval: 30s
+    rules:
+      # Alert when error rate exceeds 5% for 5 minutes
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_errors_total[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: backend
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # Alert when 95th percentile latency exceeds 1 second
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: backend
+        annotations:
+          summary: "High request latency detected"
+          description: "95th percentile latency is {{ $value }}s"
+
+      # Critical alert when latency exceeds 3 seconds
+      - alert: CriticalLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 3
+        for: 2m
+        labels:
+          severity: critical
+          component: backend
+        annotations:
+          summary: "Critical request latency"
+          description: "95th percentile latency is {{ $value }}s - immediate attention required"
+
+      # Alert when a specific endpoint has high error rate
+      - alert: EndpointHighErrorRate
+        expr: |
+          sum(rate(http_errors_total[5m])) by (endpoint) / sum(rate(http_requests_total[5m])) by (endpoint) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: backend
+        annotations:
+          summary: "High error rate on endpoint {{ $labels.endpoint }}"
+          description: "Endpoint {{ $labels.endpoint }} has {{ $value | humanizePercentage }} error rate"
+
+  # Worker Alerts
+  - name: worker_alerts
+    interval: 30s
+    rules:
+      # Alert when no workers are active
+      - alert: NoActiveWorkers
+        expr: |
+          sum(workers_active) == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: workers
+        annotations:
+          summary: "No active workers available"
+          description: "All workers are offline or unavailable - task processing is halted"
+
+      # Alert when worker count is low
+      - alert: LowWorkerCount
+        expr: |
+          sum(workers_active{status="online"}) < 2
+        for: 5m
+        labels:
+          severity: warning
+          component: workers
+        annotations:
+          summary: "Low worker count"
+          description: "Only {{ $value }} workers are currently online"
+
+      # Alert when worker CPU usage is high
+      - alert: HighWorkerCPU
+        expr: |
+          workers_cpu_percent > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: workers
+        annotations:
+          summary: "High CPU usage on worker {{ $labels.machine_name }}"
+          description: "Worker {{ $labels.machine_name }} CPU usage is {{ $value }}%"
+
+      # Alert when worker memory usage is high
+      - alert: HighWorkerMemory
+        expr: |
+          workers_memory_percent > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: workers
+        annotations:
+          summary: "High memory usage on worker {{ $labels.machine_name }}"
+          description: "Worker {{ $labels.machine_name }} memory usage is {{ $value }}%"
+
+      # Alert when worker disk usage is critical
+      - alert: CriticalWorkerDisk
+        expr: |
+          workers_disk_percent > 90
+        for: 5m
+        labels:
+          severity: critical
+          component: workers
+        annotations:
+          summary: "Critical disk usage on worker {{ $labels.machine_name }}"
+          description: "Worker {{ $labels.machine_name }} disk usage is {{ $value }}% - immediate action required"
+
+  # Task and Subtask Alerts
+  - name: task_alerts
+    interval: 30s
+    rules:
+      # Alert when task failure rate is high
+      - alert: HighTaskFailureRate
+        expr: |
+          rate(tasks_failed_total[5m]) / rate(tasks_created_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: tasks
+        annotations:
+          summary: "High task failure rate"
+          description: "Task failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # Alert when no tasks are being processed
+      - alert: NoTasksProcessing
+        expr: |
+          sum(tasks_total{status="in_progress"}) == 0 AND sum(tasks_total{status="pending"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: tasks
+        annotations:
+          summary: "No tasks being processed"
+          description: "There are {{ $value }} pending tasks but none are being processed"
+
+      # Alert when task queue is growing
+      - alert: GrowingTaskQueue
+        expr: |
+          delta(tasks_total{status="pending"}[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: tasks
+        annotations:
+          summary: "Task queue is growing rapidly"
+          description: "Pending task count increased by {{ $value }} in the last 10 minutes"
+
+      # Alert when tasks are stuck in checkpoint
+      - alert: TasksStuckInCheckpoint
+        expr: |
+          sum(tasks_total{status="checkpoint"}) > 5
+        for: 30m
+        labels:
+          severity: warning
+          component: tasks
+        annotations:
+          summary: "Multiple tasks stuck in checkpoint"
+          description: "{{ $value }} tasks have been in checkpoint status for over 30 minutes"
+
+      # Alert when subtask execution is slow
+      - alert: SlowSubtaskExecution
+        expr: |
+          histogram_quantile(0.95, sum(rate(subtask_duration_seconds_bucket[5m])) by (tool, le)) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: subtasks
+        annotations:
+          summary: "Slow subtask execution for {{ $labels.tool }}"
+          description: "95th percentile subtask duration for {{ $labels.tool }} is {{ $value }}s"
+
+  # Evaluation and Quality Alerts
+  - name: evaluation_alerts
+    interval: 1m
+    rules:
+      # Alert when average evaluation score is low
+      - alert: LowEvaluationScore
+        expr: |
+          sum(rate(evaluation_score_sum[10m])) / sum(rate(evaluation_score_count[10m])) < 6
+        for: 10m
+        labels:
+          severity: warning
+          component: evaluation
+        annotations:
+          summary: "Low average evaluation score"
+          description: "Average evaluation score is {{ $value }} (threshold: 6.0)"
+
+      # Alert when specific evaluator consistently gives low scores
+      - alert: LowEvaluatorScore
+        expr: |
+          sum(rate(evaluation_score_sum[10m])) by (evaluator_type) / sum(rate(evaluation_score_count[10m])) by (evaluator_type) < 5
+        for: 10m
+        labels:
+          severity: warning
+          component: evaluation
+        annotations:
+          summary: "Low scores from {{ $labels.evaluator_type }} evaluator"
+          description: "{{ $labels.evaluator_type }} average score is {{ $value }}"
+
+      # Alert when checkpoint frequency is high
+      - alert: HighCheckpointFrequency
+        expr: |
+          rate(checkpoints_total[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: checkpoint
+        annotations:
+          summary: "High checkpoint creation frequency"
+          description: "Checkpoints are being created at {{ $value }} per second"
+
+  # WebSocket Alerts
+  - name: websocket_alerts
+    interval: 30s
+    rules:
+      # Alert when too many WebSocket connections
+      - alert: HighWebSocketConnections
+        expr: |
+          websocket_connections_active > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: websocket
+        annotations:
+          summary: "High number of WebSocket connections"
+          description: "{{ $value }} active WebSocket connections"
+
+      # Alert when WebSocket message rate is high
+      - alert: HighWebSocketMessageRate
+        expr: |
+          sum(rate(websocket_messages_sent_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: websocket
+        annotations:
+          summary: "High WebSocket message rate"
+          description: "{{ $value }} messages per second being sent"
+
+  # Database and Redis Alerts
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # Alert when database query latency is high
+      - alert: HighDatabaseLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(database_query_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High database query latency"
+          description: "95th percentile database query latency is {{ $value }}s"
+
+      # Alert when Redis operation latency is high
+      - alert: HighRedisLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(redis_operation_duration_seconds_bucket[5m])) by (le)) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "High Redis operation latency"
+          description: "95th percentile Redis operation latency is {{ $value }}s"
+
+      # Alert when database connection count is high
+      - alert: HighDatabaseConnections
+        expr: |
+          database_connections_active > 40
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High number of database connections"
+          description: "{{ $value }} active database connections (limit: 50)"
+
+  # System Health Alerts
+  - name: system_alerts
+    interval: 1m
+    rules:
+      # Alert when Prometheus is behind on scraping
+      - alert: PrometheusScrapeErrors
+        expr: |
+          rate(prometheus_target_scrapes_exceeded_sample_limit_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: prometheus
+        annotations:
+          summary: "Prometheus scrape errors detected"
+          description: "Prometheus is experiencing scrape errors"
+
+      # Alert when metrics collection is slow
+      - alert: SlowMetricsCollection
+        expr: |
+          prometheus_target_interval_length_seconds{quantile="0.99"} > 20
+        for: 5m
+        labels:
+          severity: warning
+          component: prometheus
+        annotations:
+          summary: "Slow metrics collection"
+          description: "Metrics collection is taking {{ $value }}s (expected: <15s)"
