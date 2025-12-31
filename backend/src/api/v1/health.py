@@ -21,6 +21,7 @@ from src.models.user import User
 from src.models.task import Task
 from src.models.worker import Worker
 from src.services.pool_monitor import get_pool_monitor
+from src.schemas.task import TaskStatus
 
 
 # Dashboard response schemas
@@ -432,7 +433,7 @@ async def health_dashboard(
         pending_result = await db.execute(
             select(func.count())
             .select_from(Task)
-            .where(Task.status == "pending")
+            .where(Task.status == TaskStatus.PENDING.value)
         )
         metrics.pending_tasks = pending_result.scalar() or 0
 

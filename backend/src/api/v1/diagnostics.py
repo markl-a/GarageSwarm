@@ -23,6 +23,8 @@ from src.models.user import User
 from src.models.task import Task
 from src.models.subtask import Subtask
 from src.models.worker import Worker
+from src.schemas.task import TaskStatus
+from src.schemas.subtask import SubtaskStatus
 
 logger = get_logger(__name__)
 
@@ -217,13 +219,13 @@ async def debug_task(
     issues: List[str] = []
 
     # Task stuck in progress too long
-    if task.status == "in_progress" and task.started_at:
+    if task.status == TaskStatus.IN_PROGRESS.value and task.started_at:
         hours_running = (datetime.utcnow() - task.started_at).total_seconds() / 3600
         if hours_running > 24:
             issues.append(f"Task running for {hours_running:.1f} hours - may be stuck")
 
     # No progress on active task
-    if task.status == "in_progress" and task.progress == 0:
+    if task.status == TaskStatus.IN_PROGRESS.value and task.progress == 0:
         if task.started_at and (datetime.utcnow() - task.started_at).total_seconds() > 300:
             issues.append("Task in progress but no progress recorded")
 
@@ -234,7 +236,7 @@ async def debug_task(
 
     # Subtasks without workers
     pending_count = subtask_summary.get("pending", 0)
-    if pending_count > len(assigned_workers) and task.status == "in_progress":
+    if pending_count > len(assigned_workers) and task.status == TaskStatus.IN_PROGRESS.value:
         issues.append(f"{pending_count} pending subtasks - may need more workers")
 
     return TaskDebugInfo(
@@ -296,7 +298,7 @@ async def debug_worker(
     active_subtask = await db.execute(
         select(Subtask)
         .where(Subtask.assigned_worker == worker_id)
-        .where(Subtask.status == "in_progress")
+        .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
         .limit(1)
     )
     current = active_subtask.scalar_one_or_none()
@@ -372,7 +374,7 @@ async def system_diagnostics(
     stuck_cutoff = datetime.utcnow() - timedelta(hours=24)
     stuck_result = await db.execute(
         select(Task)
-        .where(Task.status == "in_progress")
+        .where(Task.status == TaskStatus.IN_PROGRESS.value)
         .where(Task.started_at < stuck_cutoff)
     )
     for task in stuck_result.scalars():
@@ -417,7 +419,7 @@ async def system_diagnostics(
         offline_ids = [UUID(w["worker_id"]) for w in offline_workers]
         orphan_result = await db.execute(
             select(Subtask)
-            .where(Subtask.status == "in_progress")
+            .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
             .where(Subtask.assigned_worker.in_(offline_ids))
         )
         for subtask in orphan_result.scalars():
@@ -512,7 +514,7 @@ async def cleanup_offline_workers(
         subtask_result = await db.execute(
             select(Subtask)
             .where(Subtask.assigned_worker == worker.worker_id)
-            .where(Subtask.status == "in_progress")
+            .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
         )
         for subtask in subtask_result.scalars():
             subtask.status = "pending"
