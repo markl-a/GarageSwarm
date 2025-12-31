@@ -44,39 +44,29 @@ flutter run -d linux
 ```
 frontend/
 ├── lib/
-│   ├── main.dart              # Application entry point
-│   ├── screens/               # UI screens
-│   │   ├── dashboard_screen.dart
-│   │   ├── task_list_screen.dart
-│   │   ├── worker_management_screen.dart
-│   │   └── checkpoint_review_screen.dart
-│   ├── widgets/               # Reusable widgets
-│   │   ├── agent_status_card.dart
-│   │   ├── task_timeline_visualizer.dart
-│   │   ├── worker_health_monitor.dart
-│   │   └── evaluation_score_display.dart
-│   ├── providers/             # Riverpod providers
-│   │   ├── dashboard_provider.dart
-│   │   ├── task_provider.dart
-│   │   ├── worker_provider.dart
-│   │   └── websocket_provider.dart
-│   ├── models/                # Data models
-│   │   ├── task.dart
-│   │   ├── worker.dart
-│   │   ├── subtask.dart
-│   │   └── checkpoint.dart
-│   ├── services/              # API services
-│   │   ├── api_client.dart
-│   │   ├── websocket_service.dart
-│   │   ├── task_service.dart
-│   │   └── worker_service.dart
-│   └── utils/                 # Utilities
-│       ├── constants.dart
-│       ├── theme.dart
-│       └── helpers.dart
-├── test/                      # Tests
-├── assets/                    # Assets (images, icons)
-└── pubspec.yaml              # Dependencies
+│   ├── main.dart                    # Application entry point
+│   ├── config/                      # Configuration
+│   │   └── env_config.dart          # Environment variables
+│   ├── router/                      # Navigation
+│   │   └── app_router.dart          # go_router configuration
+│   ├── screens/                     # UI screens
+│   │   ├── dashboard/
+│   │   │   └── dashboard_screen.dart
+│   │   ├── workers/
+│   │   │   └── workers_screen.dart
+│   │   └── tasks/
+│   │       ├── tasks_screen.dart
+│   │       ├── task_detail_screen.dart
+│   │       └── task_create_screen.dart
+│   ├── widgets/                     # Reusable widgets
+│   │   └── common/                  # Common widgets
+│   ├── providers/                   # Riverpod providers
+│   ├── models/                      # Data models
+│   └── services/                    # API services
+├── test/                            # Tests
+├── .env                             # Environment variables
+├── .env.example                     # Example environment file
+└── pubspec.yaml                     # Dependencies
 ```
 
 ## Development
@@ -224,13 +214,24 @@ UI for approving, correcting, or rejecting agent work at checkpoints.
 
 ### API Endpoint
 
-Edit `lib/utils/constants.dart`:
+Configure in `.env` file:
+
+```bash
+# Backend API Configuration
+API_BASE_URL=http://localhost:8000/api/v1
+WS_BASE_URL=ws://localhost:8000/ws
+
+# Environment
+ENVIRONMENT=development
+```
+
+Access in code via `EnvConfig`:
 
 ```dart
-class AppConstants {
-  static const String apiBaseUrl = 'http://localhost:8000/api/v1';
-  static const String wsBaseUrl = 'ws://localhost:8000/ws';
-}
+import 'package:multi_agent_frontend/config/env_config.dart';
+
+final apiUrl = EnvConfig.apiBaseUrl;
+final wsUrl = EnvConfig.wsBaseUrl;
 ```
 
 ## Build
