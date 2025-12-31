@@ -227,3 +227,126 @@ class TaskProgressResponse(BaseModel):
             }
         }
     )
+
+
+class TaskPriority(str, Enum):
+    """Task priority levels"""
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class TaskPriorityUpdateRequest(BaseModel):
+    """Update task priority request"""
+    priority: TaskPriority = Field(..., description="New priority level")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "priority": "high"
+            }
+        }
+    )
+
+
+class BatchTaskRequest(BaseModel):
+    """Batch operation request for multiple tasks"""
+    task_ids: List[UUID] = Field(..., min_length=1, max_length=100, description="List of task IDs")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "task_ids": [
+                    "123e4567-e89b-12d3-a456-426614174000",
+                    "456e7890-e89b-12d3-a456-426614174001"
+                ]
+            }
+        }
+    )
+
+
+class BatchOperationResult(BaseModel):
+    """Result of batch operation on a single task"""
+    task_id: UUID
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BatchOperationResponse(BaseModel):
+    """Batch operation response"""
+    operation: str = Field(..., description="Operation performed")
+    total: int = Field(..., description="Total tasks in request")
+    successful: int = Field(..., description="Successfully processed tasks")
+    failed: int = Field(..., description="Failed tasks")
+    results: List[BatchOperationResult] = Field(..., description="Individual results")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "operation": "cancel",
+                "total": 2,
+                "successful": 2,
+                "failed": 0,
+                "results": [
+                    {"task_id": "123e4567-e89b-12d3-a456-426614174000", "success": True, "message": "Cancelled"},
+                    {"task_id": "456e7890-e89b-12d3-a456-426614174001", "success": True, "message": "Cancelled"}
+                ]
+            }
+        }
+    )
+
+
+class TaskAnalytics(BaseModel):
+    """Task analytics data"""
+    total_tasks: int
+    by_status: Dict[str, int]
+    by_priority: Dict[str, int]
+    average_completion_time_hours: Optional[float] = None
+    completion_rate: float = Field(..., ge=0, le=100, description="Percentage of completed tasks")
+    failure_rate: float = Field(..., ge=0, le=100, description="Percentage of failed tasks")
+    active_tasks: int
+    pending_tasks: int
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total_tasks": 100,
+                "by_status": {"completed": 60, "in_progress": 25, "pending": 10, "failed": 5},
+                "by_priority": {"normal": 50, "high": 30, "urgent": 15, "low": 5},
+                "average_completion_time_hours": 2.5,
+                "completion_rate": 60.0,
+                "failure_rate": 5.0,
+                "active_tasks": 25,
+                "pending_tasks": 10
+            }
+        }
+    )
+
+
+class WorkerAnalytics(BaseModel):
+    """Worker analytics data"""
+    total_workers: int
+    by_status: Dict[str, int]
+    online_workers: int
+    busy_workers: int
+    idle_workers: int
+    average_tasks_per_worker: float
+    top_performers: List[Dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SystemAnalytics(BaseModel):
+    """System-wide analytics"""
+    timestamp: datetime
+    tasks: TaskAnalytics
+    workers: WorkerAnalytics
+    subtasks: Dict[str, int] = Field(..., description="Subtask counts by status")
+    queue_length: int
+    throughput_per_hour: float = Field(..., description="Tasks completed per hour (last 24h)")
+
+    model_config = ConfigDict(from_attributes=True)

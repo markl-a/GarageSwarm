@@ -27,8 +27,17 @@ from src.schemas.task import (
     TaskSummary,
     TaskStatus,
     SubtaskSummary,
-    EvaluationScores
+    EvaluationScores,
+    TaskPriority,
+    TaskPriorityUpdateRequest,
+    BatchTaskRequest,
+    BatchOperationResult,
+    BatchOperationResponse,
+    TaskAnalytics,
+    WorkerAnalytics,
+    SystemAnalytics
 )
+from src.services.analytics_service import AnalyticsService
 from src.schemas.subtask import (
     TaskDecomposeResponse,
     ReadySubtasksResponse,
@@ -54,6 +63,14 @@ async def get_task_decomposer(
 ) -> TaskDecomposer:
     """Dependency to get TaskDecomposer instance"""
     return TaskDecomposer(db, redis_service)
+
+
+async def get_analytics_service(
+    db: AsyncSession = Depends(get_db),
+    redis_service: RedisService = Depends(get_redis_service)
+) -> AnalyticsService:
+    """Dependency to get AnalyticsService instance"""
+    return AnalyticsService(db, redis_service)
 
 
 @router.post(
@@ -492,4 +509,357 @@ async def get_ready_subtasks(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get ready subtasks: {str(e)}"
+        )
+
+
+# =============================================================================
+# Priority Management
+# =============================================================================
+
+@router.patch(
+    "/tasks/{task_id}/priority",
+    status_code=status.HTTP_200_OK,
+    summary="Update Task Priority",
+    description="Update the priority level of a task"
+)
+async def update_task_priority(
+    task_id: UUID,
+    request: TaskPriorityUpdateRequest,
+    task_service: TaskService = Depends(get_task_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Update task priority level.
+
+    Priority levels (affects scheduling order):
+    - low: Background tasks
+    - normal: Default priority (default)
+    - high: Important tasks
+    - urgent: Critical tasks (scheduled first)
+
+    **Path parameters:**
+    - task_id: UUID of the task
+
+    **Request body:**
+    - priority: New priority level
+    """
+    try:
+        task = await task_service.get_task(task_id)
+        if not task:
+            raise NotFoundError("Task", str(task_id))
+
+        # Update priority in task_metadata
+        if task.task_metadata is None:
+            task.task_metadata = {}
+        task.task_metadata["priority"] = request.priority.value
+
+        await task_service.db.commit()
+
+        return {
+            "task_id": str(task_id),
+            "priority": request.priority.value,
+            "message": "Priority updated successfully"
+        }
+    except NotFoundError:
+        raise
+    except Exception as e:
+        logger.error("Failed to update priority", task_id=str(task_id), error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update priority: {str(e)}"
+        )
+
+
+# =============================================================================
+# Batch Operations
+# =============================================================================
+
+@router.post(
+    "/tasks/batch/cancel",
+    response_model=BatchOperationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Batch Cancel Tasks",
+    description="Cancel multiple tasks at once"
+)
+async def batch_cancel_tasks(
+    request: BatchTaskRequest,
+    task_service: TaskService = Depends(get_task_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Cancel multiple tasks in a single request.
+
+    **Request body:**
+    - task_ids: List of task UUIDs to cancel (max 100)
+
+    **Response:**
+    - operation: "cancel"
+    - total: Total tasks in request
+    - successful: Successfully cancelled tasks
+    - failed: Failed tasks
+    - results: Individual results for each task
+    """
+    logger.info("Batch cancel", task_count=len(request.task_ids), user_id=str(current_user.user_id))
+
+    results = []
+    successful = 0
+    failed = 0
+
+    for task_id in request.task_ids:
+        try:
+            await task_service.cancel_task(task_id)
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=True,
+                message="Cancelled"
+            ))
+            successful += 1
+        except ValueError as e:
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=False,
+                error=str(e)
+            ))
+            failed += 1
+        except Exception as e:
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=False,
+                error=f"Unexpected error: {str(e)}"
+            ))
+            failed += 1
+
+    return BatchOperationResponse(
+        operation="cancel",
+        total=len(request.task_ids),
+        successful=successful,
+        failed=failed,
+        results=results
+    )
+
+
+@router.post(
+    "/tasks/batch/priority",
+    response_model=BatchOperationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Batch Update Priority",
+    description="Update priority for multiple tasks"
+)
+async def batch_update_priority(
+    request: BatchTaskRequest,
+    priority: TaskPriority = Query(..., description="New priority level"),
+    task_service: TaskService = Depends(get_task_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Update priority for multiple tasks.
+
+    **Query parameters:**
+    - priority: New priority level for all tasks
+
+    **Request body:**
+    - task_ids: List of task UUIDs (max 100)
+    """
+    logger.info("Batch priority update", task_count=len(request.task_ids), priority=priority.value)
+
+    results = []
+    successful = 0
+    failed = 0
+
+    for task_id in request.task_ids:
+        try:
+            task = await task_service.get_task(task_id)
+            if not task:
+                results.append(BatchOperationResult(
+                    task_id=task_id,
+                    success=False,
+                    error="Task not found"
+                ))
+                failed += 1
+                continue
+
+            if task.task_metadata is None:
+                task.task_metadata = {}
+            task.task_metadata["priority"] = priority.value
+
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=True,
+                message=f"Priority set to {priority.value}"
+            ))
+            successful += 1
+        except Exception as e:
+            results.append(BatchOperationResult(
+                task_id=task_id,
+                success=False,
+                error=str(e)
+            ))
+            failed += 1
+
+    await task_service.db.commit()
+
+    return BatchOperationResponse(
+        operation="priority_update",
+        total=len(request.task_ids),
+        successful=successful,
+        failed=failed,
+        results=results
+    )
+
+
+# =============================================================================
+# Analytics
+# =============================================================================
+
+@router.get(
+    "/analytics/tasks",
+    response_model=TaskAnalytics,
+    status_code=status.HTTP_200_OK,
+    summary="Get Task Analytics",
+    description="Get comprehensive task analytics and statistics"
+)
+async def get_task_analytics(
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Get task analytics including:
+    - Total tasks count
+    - Tasks by status
+    - Tasks by priority
+    - Average completion time
+    - Completion and failure rates
+    - Active and pending task counts
+    """
+    try:
+        analytics = await analytics_service.get_task_analytics()
+        return TaskAnalytics(**analytics)
+    except Exception as e:
+        logger.error("Failed to get task analytics", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analytics: {str(e)}"
+        )
+
+
+@router.get(
+    "/analytics/workers",
+    response_model=WorkerAnalytics,
+    status_code=status.HTTP_200_OK,
+    summary="Get Worker Analytics",
+    description="Get worker performance analytics"
+)
+async def get_worker_analytics(
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Get worker analytics including:
+    - Total workers
+    - Workers by status
+    - Top performers
+    - Average tasks per worker
+    """
+    try:
+        analytics = await analytics_service.get_worker_analytics()
+        return WorkerAnalytics(**analytics)
+    except Exception as e:
+        logger.error("Failed to get worker analytics", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analytics: {str(e)}"
+        )
+
+
+@router.get(
+    "/analytics/system",
+    response_model=SystemAnalytics,
+    status_code=status.HTTP_200_OK,
+    summary="Get System Analytics",
+    description="Get comprehensive system-wide analytics"
+)
+async def get_system_analytics(
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Get complete system analytics including:
+    - Task analytics
+    - Worker analytics
+    - Subtask status distribution
+    - Queue length
+    - Throughput (tasks/hour)
+    """
+    try:
+        analytics = await analytics_service.get_system_analytics()
+        return SystemAnalytics(**analytics)
+    except Exception as e:
+        logger.error("Failed to get system analytics", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analytics: {str(e)}"
+        )
+
+
+@router.get(
+    "/analytics/daily",
+    status_code=status.HTTP_200_OK,
+    summary="Get Daily Summary",
+    description="Get daily task summary for the last N days"
+)
+async def get_daily_summary(
+    days: int = Query(7, ge=1, le=30, description="Number of days"),
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Get daily task summary including:
+    - Tasks created per day
+    - Tasks completed per day
+    - Tasks failed per day
+    """
+    try:
+        summary = await analytics_service.get_daily_summary(days=days)
+        return {"days": days, "summary": summary}
+    except Exception as e:
+        logger.error("Failed to get daily summary", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get summary: {str(e)}"
+        )
+
+
+@router.get(
+    "/tasks/{task_id}/timeline",
+    status_code=status.HTTP_200_OK,
+    summary="Get Task Timeline",
+    description="Get detailed execution timeline for a task"
+)
+async def get_task_timeline(
+    task_id: UUID,
+    include_subtasks: bool = Query(True, description="Include subtask timelines"),
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Get task execution timeline including:
+    - Task creation, start, and completion times
+    - Duration
+    - Subtask timelines (optional)
+    """
+    try:
+        timeline = await analytics_service.get_task_timeline(
+            task_id=task_id,
+            include_subtasks=include_subtasks
+        )
+        if not timeline:
+            raise NotFoundError("Task", str(task_id))
+        return timeline
+    except NotFoundError:
+        raise
+    except Exception as e:
+        logger.error("Failed to get task timeline", task_id=str(task_id), error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get timeline: {str(e)}"
         )
