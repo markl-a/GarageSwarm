@@ -694,23 +694,49 @@ async def general_websocket_endpoint(
     }
     ```
     """
-    # Validate token if provided (optional for now, can be made required)
-    user_id = None
-    if token:
-        try:
-            payload = verify_token(token, expected_type=TokenType.ACCESS)
-            user_id_str = payload.get("sub")
-            if user_id_str:
-                user_id = UUID(user_id_str)
-        except (JWTError, ValueError) as e:
-            logger.warning("WebSocket auth failed", error=str(e))
-            # Continue without authentication for now (can be made stricter)
+    # --- Mandatory Authentication Check ---
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required: missing token")
+        logger.warning("General WebSocket connection rejected - no token provided")
+        return
+
+    # Verify JWT token
+    try:
+        payload = verify_token(token, expected_type=TokenType.ACCESS)
+        user_id_str = payload.get("sub")
+        if not user_id_str:
+            await websocket.close(code=4003, reason="Invalid token: missing user identifier")
+            logger.warning("General WebSocket connection rejected - invalid token")
+            return
+
+        user_id = UUID(user_id_str)
+
+        # Verify user exists and is active
+        user_result = await db.execute(select(User).where(User.user_id == user_id))
+        user = user_result.scalar_one_or_none()
+
+        if not user:
+            await websocket.close(code=4004, reason="User not found")
+            logger.warning("General WebSocket connection rejected - user not found", user_id=str(user_id))
+            return
+
+        if hasattr(user, "is_active") and not user.is_active:
+            await websocket.close(code=4003, reason="User account is inactive")
+            logger.warning("General WebSocket connection rejected - user inactive", user_id=str(user_id))
+            return
+
+        logger.info("General WebSocket authenticated", user_id=str(user_id), username=user.username)
+
+    except (JWTError, ValueError) as e:
+        await websocket.close(code=4003, reason=f"Authentication failed: {str(e)}")
+        logger.warning("General WebSocket connection rejected - token verification failed", error=str(e))
+        return
 
     # Generate unique client ID and accept WebSocket connection
     import uuid as uuid_module
-    client_id = str(uuid_module.uuid4())
+    client_id = f"{user_id}_{uuid_module.uuid4()}"
     await connection_manager.connect(client_id, websocket, redis_service)
-    logger.info("General WebSocket client connected", client_id=client_id, user_id=str(user_id) if user_id else None)
+    logger.info("General WebSocket client connected", client_id=client_id, user_id=str(user_id))
 
     # Track subscriptions for this client
     task_subscriptions: Set[UUID] = set()
@@ -927,7 +953,7 @@ async def send_log(
 )
 async def get_task_logs(
     task_id: UUID,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000, description="Maximum logs to return (1-1000)"),
     db: AsyncSession = Depends(get_db),
     redis_service: RedisService = Depends(get_redis_service)
 ):
@@ -938,7 +964,7 @@ async def get_task_logs(
     - task_id: UUID of the task
 
     **Query parameters:**
-    - limit: Maximum number of logs to return (default: 100)
+    - limit: Maximum number of logs to return (1-1000, default: 100)
 
     **Response:**
     - List of log messages ordered by timestamp (newest first)

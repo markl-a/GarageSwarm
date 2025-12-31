@@ -454,3 +454,90 @@ class CycleDetectedError(AppException):
 
 # Alias for backward compatibility
 TimeoutError = OperationTimeoutError
+
+
+# ==================== Error Message Utilities ====================
+
+# Generic error messages for production (don't expose internal details)
+GENERIC_ERROR_MESSAGES = {
+    "create": "Failed to create resource. Please try again.",
+    "read": "Failed to retrieve resource. Please try again.",
+    "update": "Failed to update resource. Please try again.",
+    "delete": "Failed to delete resource. Please try again.",
+    "list": "Failed to list resources. Please try again.",
+    "allocate": "Failed to allocate resource. Please try again.",
+    "schedule": "Failed to schedule operation. Please try again.",
+    "evaluate": "Failed to evaluate. Please try again.",
+    "upload": "Failed to upload data. Please try again.",
+    "operation": "Operation failed. Please try again.",
+}
+
+
+def safe_error_message(
+    operation: str,
+    error: Exception,
+    include_details: bool = False
+) -> str:
+    """
+    Get a safe error message for HTTP responses.
+
+    In production, returns a generic message.
+    In debug mode (or when include_details=True), includes the actual error.
+
+    Args:
+        operation: Type of operation (create, read, update, delete, etc.)
+        error: The caught exception
+        include_details: Whether to include actual error details
+
+    Returns:
+        Safe error message string
+    """
+    from src.config import settings
+
+    # Get generic message for operation type
+    generic_msg = GENERIC_ERROR_MESSAGES.get(
+        operation.lower(),
+        GENERIC_ERROR_MESSAGES["operation"]
+    )
+
+    # In DEBUG mode or when explicitly requested, include details
+    if settings.DEBUG or include_details:
+        return f"{generic_msg} Details: {str(error)}"
+
+    return generic_msg
+
+
+def create_http_exception(
+    status_code: int,
+    operation: str,
+    error: Exception,
+    logger=None
+) -> 'HTTPException':
+    """
+    Create an HTTPException with safe error message.
+
+    Logs the full error details server-side, but returns a safe message to client.
+
+    Args:
+        status_code: HTTP status code
+        operation: Type of operation (for generic message selection)
+        error: The caught exception
+        logger: Optional logger for server-side logging
+
+    Returns:
+        HTTPException with safe detail message
+    """
+    from fastapi import HTTPException
+
+    # Log full error server-side
+    if logger:
+        logger.error(
+            f"{operation} failed",
+            error=str(error),
+            error_type=type(error).__name__
+        )
+
+    return HTTPException(
+        status_code=status_code,
+        detail=safe_error_message(operation, error)
+    )

@@ -991,6 +991,42 @@ class RedisService:
         current = int(count) if count else 0
         return max(0, limit - current)
 
+    async def check_ip_rate_limit(
+        self, ip_address: str, endpoint: str, limit: int = 10, window: int = 60
+    ) -> tuple[bool, int, int]:
+        """
+        Check if IP-based request is within rate limit (for unauthenticated endpoints)
+
+        Args:
+            ip_address: Client IP address
+            endpoint: API endpoint
+            limit: Maximum requests allowed
+            window: Time window in seconds
+
+        Returns:
+            Tuple of (allowed, remaining, retry_after)
+            - allowed: True if within limit
+            - remaining: Remaining requests in window
+            - retry_after: Seconds until reset (0 if allowed)
+        """
+        key = f"ratelimit:ip:{ip_address}:{endpoint}"
+        current_count = await self.redis.get(key)
+        count = int(current_count) if current_count else 0
+
+        if count >= limit:
+            # Get TTL for retry_after
+            ttl = await self.redis.ttl(key)
+            retry_after = max(0, ttl) if ttl > 0 else window
+            return (False, 0, retry_after)
+
+        # Increment counter
+        new_count = await self.redis.incr(key)
+        if new_count == 1:
+            await self.redis.expire(key, window)
+
+        remaining = max(0, limit - new_count)
+        return (True, remaining, 0)
+
     # ==================== Query Result Caching ====================
 
     async def cache_query_result(

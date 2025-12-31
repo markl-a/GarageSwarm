@@ -559,7 +559,8 @@ async def reallocate_queued_subtasks(
 )
 async def release_worker(
     worker_id: UUID,
-    allocator: TaskAllocator = Depends(get_task_allocator)
+    allocator: TaskAllocator = Depends(get_task_allocator),
+    current_user: User = Depends(require_auth)
 ):
     """
     Release a worker so it can accept new tasks.

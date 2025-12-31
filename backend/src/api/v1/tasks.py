@@ -16,7 +16,7 @@ from src.models.user import User
 from src.services.task_service import TaskService
 from src.services.task_decomposer import TaskDecomposer
 from src.services.redis_service import RedisService
-from src.exceptions import NotFoundError, ValidationError
+from src.exceptions import NotFoundError, ValidationError, create_http_exception
 from src.schemas.task import (
     TaskCreateRequest,
     TaskCreateResponse,
@@ -123,10 +123,8 @@ async def create_task(
     except ValidationError:
         raise
     except Exception as e:
-        logger.error("Failed to create task", error=str(e), error_type=type(e).__name__)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create task: {str(e)}"
+        raise create_http_exception(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "create", e, logger
         )
 
 
@@ -186,10 +184,8 @@ async def list_tasks(
             offset=offset
         )
     except Exception as e:
-        logger.error("Failed to list tasks", error=str(e), error_type=type(e).__name__)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list tasks: {str(e)}"
+        raise create_http_exception(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "list", e, logger
         )
 
 

@@ -7,7 +7,7 @@ REST API for user authentication (login, register, refresh, logout).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,7 @@ from src.auth.jwt_handler import (
 )
 from src.auth.password import hash_password, verify_password
 from src.database import get_db
+from src.dependencies import get_redis_service
 from src.logging_config import get_logger
 from src.models.user import User
 from src.schemas.auth import (
@@ -37,10 +38,35 @@ from src.schemas.auth import (
     PasswordChangeRequest,
     PasswordChangeResponse,
 )
+from src.services.redis_service import RedisService
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+# Rate limiting configuration
+REGISTER_RATE_LIMIT = 5  # 5 registrations per window
+REGISTER_RATE_WINDOW = 3600  # 1 hour window
+LOGIN_RATE_LIMIT = 10  # 10 login attempts per window
+LOGIN_RATE_WINDOW = 300  # 5 minute window
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP from request, handling proxy headers"""
+    # Check X-Forwarded-For header first (for reverse proxy scenarios)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Take the first IP (original client)
+        return forwarded_for.split(",")[0].strip()
+
+    # Check X-Real-IP header
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+
+    # Fall back to direct client host
+    return request.client.host if request.client else "unknown"
 
 
 @router.post(
@@ -52,7 +78,9 @@ router = APIRouter()
 )
 async def register(
     request: UserRegisterRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
+    redis_service: RedisService = Depends(get_redis_service),
 ):
     """
     Register a new user account
@@ -62,7 +90,30 @@ async def register(
     - **username**: 3-50 characters, alphanumeric with hyphens/underscores
     - **email**: Valid email address
     - **password**: Minimum 8 characters
+
+    Rate limit: 5 registrations per hour per IP address
     """
+    # Rate limiting check
+    client_ip = get_client_ip(http_request)
+    allowed, remaining, retry_after = await redis_service.check_ip_rate_limit(
+        ip_address=client_ip,
+        endpoint="auth:register",
+        limit=REGISTER_RATE_LIMIT,
+        window=REGISTER_RATE_WINDOW
+    )
+
+    if not allowed:
+        logger.warning(
+            "Registration rate limit exceeded",
+            ip=client_ip,
+            retry_after=retry_after
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many registration attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)}
+        )
+
     # Check if username already exists
     result = await db.execute(select(User).where(User.username == request.username))
     if result.scalar_one_or_none():
@@ -122,7 +173,9 @@ async def register(
 )
 async def login(
     request: UserLoginRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
+    redis_service: RedisService = Depends(get_redis_service),
 ):
     """
     Authenticate user and generate tokens
@@ -131,7 +184,30 @@ async def login(
 
     - **username**: Username or email
     - **password**: User password
+
+    Rate limit: 10 attempts per 5 minutes per IP address
     """
+    # Rate limiting check
+    client_ip = get_client_ip(http_request)
+    allowed, remaining, retry_after = await redis_service.check_ip_rate_limit(
+        ip_address=client_ip,
+        endpoint="auth:login",
+        limit=LOGIN_RATE_LIMIT,
+        window=LOGIN_RATE_WINDOW
+    )
+
+    if not allowed:
+        logger.warning(
+            "Login rate limit exceeded",
+            ip=client_ip,
+            retry_after=retry_after
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)}
+        )
+
     # Find user by username or email
     result = await db.execute(
         select(User).where(
