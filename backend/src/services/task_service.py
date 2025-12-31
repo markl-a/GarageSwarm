@@ -12,6 +12,7 @@ from src.models.task import Task
 from src.models.subtask import Subtask
 from src.services.redis_service import RedisService
 from src.schemas.task import TaskStatus, CheckpointFrequency, PrivacyLevel
+from src.schemas.subtask import SubtaskStatus
 from src.exceptions import OptimisticLockError, NotFoundError
 
 logger = structlog.get_logger()
@@ -385,8 +386,6 @@ class TaskService:
             Dict with combined task data, or None if not found
         """
         # Get task from database with subtasks and evaluations
-        from sqlalchemy.orm import selectinload
-
         result = await self.db.execute(
             select(Task)
             .options(
@@ -498,9 +497,9 @@ class TaskService:
 
         # Update timestamps
         now = datetime.utcnow()
-        if status == "in_progress" and subtask.started_at is None:
+        if status == SubtaskStatus.IN_PROGRESS.value and subtask.started_at is None:
             subtask.started_at = now
-        elif status in ["completed", "failed"]:
+        elif status in [SubtaskStatus.COMPLETED.value, SubtaskStatus.FAILED.value]:
             subtask.completed_at = now
 
         await self.db.commit()
@@ -514,7 +513,7 @@ class TaskService:
         await self._update_task_progress_from_subtasks(subtask.task_id)
 
         # Publish event for event-driven scheduling (replaces polling)
-        if status == "completed":
+        if status == SubtaskStatus.COMPLETED.value:
             await self.redis.publish_subtask_completed(subtask_id, subtask.task_id)
             logger.debug(
                 "Published subtask completion event",
@@ -537,7 +536,7 @@ class TaskService:
             select(
                 func.count().label('total'),
                 func.sum(
-                    case((Subtask.status == "completed", 1), else_=0)
+                    case((Subtask.status == SubtaskStatus.COMPLETED.value, 1), else_=0)
                 ).label('completed')
             )
             .where(Subtask.task_id == task_id)

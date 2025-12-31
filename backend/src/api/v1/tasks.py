@@ -30,6 +30,7 @@ from src.schemas.task import (
     EvaluationScores,
     TaskPriority,
     TaskPriorityUpdateRequest,
+    TaskPriorityUpdateResponse,
     BatchTaskRequest,
     BatchOperationResult,
     BatchOperationResponse,
@@ -514,6 +515,7 @@ async def get_ready_subtasks(
 
 @router.patch(
     "/tasks/{task_id}/priority",
+    response_model=TaskPriorityUpdateResponse,
     status_code=status.HTTP_200_OK,
     summary="Update Task Priority",
     description="Update the priority level of a task"
@@ -551,11 +553,11 @@ async def update_task_priority(
 
         await task_service.db.commit()
 
-        return {
-            "task_id": str(task_id),
-            "priority": request.priority.value,
-            "message": "Priority updated successfully"
-        }
+        return TaskPriorityUpdateResponse(
+            task_id=task_id,
+            priority=request.priority,
+            message="Priority updated successfully"
+        )
     except NotFoundError:
         raise
     except Exception as e:

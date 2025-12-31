@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 import structlog
 
 from src.models.worker import Worker
@@ -229,8 +230,6 @@ class WorkerService:
             tuple: (list of workers, total count)
         """
         # Build query with eager loading to avoid N+1
-        from sqlalchemy.orm import selectinload
-
         query = select(Worker).options(
             selectinload(Worker.subtasks)  # Eager load current subtasks
         )

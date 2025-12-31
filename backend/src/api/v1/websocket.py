@@ -71,7 +71,7 @@ class RedisPubSubManager:
         # Reference to the connection manager for routing messages
         self.connection_manager: Optional['ConnectionManager'] = None
 
-    async def start(self, connection_manager: 'ConnectionManager'):
+    async def start(self, connection_manager: 'ConnectionManager') -> None:
         """
         Start Redis Pub/Sub listener
 
@@ -85,7 +85,7 @@ class RedisPubSubManager:
         self.listener_task = asyncio.create_task(self._listen_to_redis())
         logger.info("Redis Pub/Sub manager started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop Redis Pub/Sub listener"""
         if self.listener_task:
             self.listener_task.cancel()
@@ -99,7 +99,7 @@ class RedisPubSubManager:
 
         logger.info("Redis Pub/Sub manager stopped")
 
-    async def subscribe_to_task(self, task_id: UUID):
+    async def subscribe_to_task(self, task_id: UUID) -> None:
         """
         Subscribe to task channel
 
@@ -115,7 +115,7 @@ class RedisPubSubManager:
             # Increment subscription count
             self.active_subscriptions[task_id] += 1
 
-    async def unsubscribe_from_task(self, task_id: UUID):
+    async def unsubscribe_from_task(self, task_id: UUID) -> None:
         """
         Unsubscribe from task channel
 
@@ -131,7 +131,7 @@ class RedisPubSubManager:
                 del self.active_subscriptions[task_id]
                 logger.info("Unsubscribed from Redis channel for task", task_id=str(task_id))
 
-    async def _listen_to_redis(self):
+    async def _listen_to_redis(self) -> None:
         """Background task to listen for Redis Pub/Sub messages"""
         try:
             while True:
@@ -197,20 +197,20 @@ class ConnectionManager:
         # Redis Pub/Sub manager
         self.pubsub_manager: Optional[RedisPubSubManager] = None
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize Redis Pub/Sub manager if Redis service is available"""
         if self.redis_service and not self.pubsub_manager:
             self.pubsub_manager = RedisPubSubManager(self.redis_service)
             await self.pubsub_manager.start(self)
             logger.info("ConnectionManager initialized with Redis Pub/Sub support")
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown Redis Pub/Sub manager"""
         if self.pubsub_manager:
             await self.pubsub_manager.stop()
             logger.info("ConnectionManager shutdown complete")
 
-    async def connect(self, client_id: str, websocket: WebSocket, redis_service: Optional[RedisService] = None):
+    async def connect(self, client_id: str, websocket: WebSocket, redis_service: Optional[RedisService] = None) -> None:
         """
         Register a new WebSocket connection
 
@@ -242,7 +242,7 @@ class ConnectionManager:
 
         logger.info("WebSocket client connected", client_id=client_id, total_connections=len(self.active_connections))
 
-    async def disconnect(self, client_id: str):
+    async def disconnect(self, client_id: str) -> None:
         """
         Remove a WebSocket connection and cleanup all subscriptions
 
@@ -279,7 +279,7 @@ class ConnectionManager:
 
         logger.info("WebSocket client disconnected", client_id=client_id, total_connections=len(self.active_connections))
 
-    async def subscribe_to_task(self, client_id: str, task_id: UUID):
+    async def subscribe_to_task(self, client_id: str, task_id: UUID) -> None:
         """
         Subscribe a client to task logs
 
@@ -304,7 +304,7 @@ class ConnectionManager:
 
         logger.info("Client subscribed to task", client_id=client_id, task_id=str(task_id))
 
-    async def unsubscribe_from_task(self, client_id: str, task_id: UUID):
+    async def unsubscribe_from_task(self, client_id: str, task_id: UUID) -> None:
         """
         Unsubscribe a client from task logs
 
@@ -325,7 +325,7 @@ class ConnectionManager:
 
         logger.info("Client unsubscribed from task", client_id=client_id, task_id=str(task_id))
 
-    async def send_personal_message(self, message: dict, client_id: str):
+    async def send_personal_message(self, message: dict, client_id: str) -> None:
         """
         Send message to specific client
 
@@ -406,7 +406,7 @@ class ConnectionManager:
             # No Redis service - broadcast locally only
             return await self.broadcast_to_local_subscribers(task_id, message)
 
-    async def broadcast_to_all(self, message: dict):
+    async def broadcast_to_all(self, message: dict) -> None:
         """
         Broadcast message to all connected clients
 

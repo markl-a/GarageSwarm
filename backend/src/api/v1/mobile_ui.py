@@ -186,6 +186,6 @@ MOBILE_HTML = '''<!DOCTYPE html>
 
 
 @router.get("/", response_class=HTMLResponse)
-async def mobile_ui():
+async def mobile_ui() -> HTMLResponse:
     """Serve mobile UI"""
     return HTMLResponse(content=MOBILE_HTML)

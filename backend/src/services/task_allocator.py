@@ -13,6 +13,8 @@ from src.models.subtask import Subtask
 from src.models.worker import Worker
 from src.services.redis_service import RedisService
 from src.config import get_settings
+from src.schemas.subtask import SubtaskStatus
+from src.schemas.worker import WorkerStatus
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -31,6 +33,26 @@ RESOURCE_THRESHOLDS = {
     "memory_high": 85,   # Memory % above this is considered high usage
     "disk_high": 90,     # Disk % above this is considered high usage
 }
+
+# Resource scoring weights (CPU, Memory, Disk)
+RESOURCE_SCORING_WEIGHTS = {
+    "cpu": 0.4,
+    "memory": 0.4,
+    "disk": 0.2,
+}
+
+# Tool matching scores
+TOOL_SCORE_PERFECT_MATCH = 1.0      # Worker has the recommended tool
+TOOL_SCORE_PARTIAL_MATCH = 0.5     # Worker has other tools but not recommended
+TOOL_SCORE_NO_TOOLS = 0.0          # Worker has no tools
+TOOL_SCORE_UNKNOWN_RESOURCE = 0.5  # Default when resource usage unknown
+
+# Privacy compatibility scores
+PRIVACY_SCORE_NORMAL = 1.0         # Normal privacy - all workers compatible
+PRIVACY_SCORE_LOCAL_ONLY = 1.0     # Sensitive + local tools only
+PRIVACY_SCORE_LOCAL_WITH_CLOUD = 0.8  # Sensitive + has local option
+PRIVACY_SCORE_CLOUD_ONLY = 0.5     # Sensitive + cloud tools only
+PRIVACY_SCORE_NO_TOOLS = 0.0       # No tools available
 
 
 class TaskAllocator:
@@ -85,7 +107,7 @@ class TaskAllocator:
         if subtask.assigned_worker:
             raise ValueError(f"Subtask {subtask_id} is already assigned")
 
-        if subtask.status not in ("pending", "queued"):
+        if subtask.status not in (SubtaskStatus.PENDING.value, SubtaskStatus.QUEUED.value):
             raise ValueError(f"Subtask {subtask_id} is not in allocatable state: {subtask.status}")
 
         # Get all available workers
@@ -94,8 +116,8 @@ class TaskAllocator:
         if not available_workers:
             logger.info("No available workers for subtask", subtask_id=str(subtask_id))
             # Push to queue if not already queued
-            if subtask.status != "queued":
-                subtask.status = "queued"
+            if subtask.status != SubtaskStatus.QUEUED.value:
+                subtask.status = SubtaskStatus.QUEUED.value
                 await self.redis.push_to_queue(subtask_id)
                 await self.db.commit()
             return None
@@ -118,8 +140,8 @@ class TaskAllocator:
                 subtask_id=str(subtask_id),
                 best_score=best_score
             )
-            if subtask.status != "queued":
-                subtask.status = "queued"
+            if subtask.status != SubtaskStatus.QUEUED.value:
+                subtask.status = SubtaskStatus.QUEUED.value
                 await self.redis.push_to_queue(subtask_id)
                 await self.db.commit()
             return None
@@ -257,7 +279,7 @@ class TaskAllocator:
         # Get workers with status 'online' or 'idle'
         result = await self.db.execute(
             select(Worker)
-            .where(Worker.status.in_(["online", "idle"]))
+            .where(Worker.status.in_([WorkerStatus.ONLINE.value, WorkerStatus.IDLE.value]))
         )
         workers = list(result.scalars().all())
 
@@ -330,24 +352,24 @@ class TaskAllocator:
         """
         Calculate tool matching score.
 
-        Returns 1.0 if worker has the recommended tool or no specific tool recommended.
-        Returns 0.5 if worker has any tool but not the recommended one.
-        Returns 0.0 if worker has no tools.
+        Returns TOOL_SCORE_PERFECT_MATCH if worker has the recommended tool.
+        Returns TOOL_SCORE_PARTIAL_MATCH if worker has other tools.
+        Returns TOOL_SCORE_NO_TOOLS if worker has no tools.
         """
         recommended_tool = subtask.recommended_tool
 
         if not recommended_tool:
             # No specific tool recommended, any worker with tools is fine
-            return 1.0 if worker.tools else 0.0
+            return TOOL_SCORE_PERFECT_MATCH if worker.tools else TOOL_SCORE_NO_TOOLS
 
         if not worker.tools:
-            return 0.0
+            return TOOL_SCORE_NO_TOOLS
 
         if recommended_tool in worker.tools:
-            return 1.0  # Perfect match
+            return TOOL_SCORE_PERFECT_MATCH
 
         # Worker has tools but not the recommended one
-        return 0.5
+        return TOOL_SCORE_PARTIAL_MATCH
 
     def _calculate_resource_score(self, worker: Worker) -> float:
         """
@@ -363,27 +385,27 @@ class TaskAllocator:
             cpu_available = max(0, 100 - worker.cpu_percent)
             scores.append(cpu_available / 100)
         else:
-            scores.append(0.5)  # Unknown, assume moderate
+            scores.append(TOOL_SCORE_UNKNOWN_RESOURCE)  # Unknown, assume moderate
 
         # Memory score
         if worker.memory_percent is not None:
             mem_available = max(0, 100 - worker.memory_percent)
             scores.append(mem_available / 100)
         else:
-            scores.append(0.5)
+            scores.append(TOOL_SCORE_UNKNOWN_RESOURCE)
 
         # Disk score (less important, lower weight)
         if worker.disk_percent is not None:
             disk_available = max(0, 100 - worker.disk_percent)
             scores.append(disk_available / 100)
         else:
-            scores.append(0.5)
+            scores.append(TOOL_SCORE_UNKNOWN_RESOURCE)
 
         # Weight: CPU and memory more important than disk
         weighted_score = (
-            scores[0] * 0.4 +  # CPU
-            scores[1] * 0.4 +  # Memory
-            scores[2] * 0.2    # Disk
+            scores[0] * RESOURCE_SCORING_WEIGHTS["cpu"] +
+            scores[1] * RESOURCE_SCORING_WEIGHTS["memory"] +
+            scores[2] * RESOURCE_SCORING_WEIGHTS["disk"]
         )
 
         return weighted_score
@@ -406,7 +428,7 @@ class TaskAllocator:
         privacy_level = task.privacy_level if task else "normal"
 
         if privacy_level == "normal":
-            return 1.0  # All workers are compatible
+            return PRIVACY_SCORE_NORMAL  # All workers are compatible
 
         # Sensitive task - prefer local processing
         if worker.tools:
@@ -414,13 +436,13 @@ class TaskAllocator:
             has_cloud = any(t in worker.tools for t in ["claude_code", "gemini_cli"])
 
             if has_local and not has_cloud:
-                return 1.0  # Perfect for sensitive tasks
+                return PRIVACY_SCORE_LOCAL_ONLY  # Perfect for sensitive tasks
             elif has_local:
-                return 0.8  # Has local option
+                return PRIVACY_SCORE_LOCAL_WITH_CLOUD  # Has local option
             else:
-                return 0.5  # Only cloud options
+                return PRIVACY_SCORE_CLOUD_ONLY  # Only cloud options
         else:
-            return 0.0  # No tools
+            return PRIVACY_SCORE_NO_TOOLS  # No tools
 
     async def _assign_subtask_to_worker(
         self,
@@ -439,7 +461,7 @@ class TaskAllocator:
         subtask.assigned_tool = subtask.recommended_tool or (
             worker.tools[0] if worker.tools else None
         )
-        subtask.status = "queued"  # Will become in_progress when worker starts
+        subtask.status = SubtaskStatus.QUEUED.value  # Will become in_progress when worker starts
 
         # Update worker status
         worker.status = "busy"
@@ -466,7 +488,7 @@ class TaskAllocator:
         result = await self.db.execute(
             select(Subtask)
             .where(Subtask.task_id == task_id)
-            .where(Subtask.status == "pending")
+            .where(Subtask.status == SubtaskStatus.PENDING.value)
         )
         pending_subtasks = result.scalars().all()
 
@@ -474,7 +496,7 @@ class TaskAllocator:
         completed_result = await self.db.execute(
             select(Subtask.subtask_id)
             .where(Subtask.task_id == task_id)
-            .where(Subtask.status == "completed")
+            .where(Subtask.status == SubtaskStatus.COMPLETED.value)
         )
         completed_ids = {str(row[0]) for row in completed_result.fetchall()}
 
@@ -503,12 +525,12 @@ class TaskAllocator:
         worker = result.scalar_one_or_none()
 
         if worker:
-            worker.status = "online"
+            worker.status = WorkerStatus.ONLINE.value
             await self.db.commit()
 
         # Clear Redis current task
         await self.redis.clear_worker_current_task(worker_id)
-        await self.redis.set_worker_status(worker_id, "online")
+        await self.redis.set_worker_status(worker_id, WorkerStatus.ONLINE.value)
 
     def get_scoring_weights(self) -> Dict[str, float]:
         """Get current scoring weights"""
@@ -525,7 +547,7 @@ class TaskAllocator:
 
         # Get queued subtask count from DB
         result = await self.db.execute(
-            select(Subtask).where(Subtask.status == "queued")
+            select(Subtask).where(Subtask.status == SubtaskStatus.QUEUED.value)
         )
         queued_subtasks = len(result.scalars().all())
 

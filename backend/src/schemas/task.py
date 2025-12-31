@@ -250,6 +250,23 @@ class TaskPriorityUpdateRequest(BaseModel):
     )
 
 
+class TaskPriorityUpdateResponse(BaseModel):
+    """Task priority update response"""
+    task_id: UUID = Field(..., description="Task UUID")
+    priority: TaskPriority = Field(..., description="Updated priority level")
+    message: str = Field(..., description="Success message")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "task_id": "123e4567-e89b-12d3-a456-426614174000",
+                "priority": "high",
+                "message": "Priority updated successfully"
+            }
+        }
+    )
+
+
 class BatchTaskRequest(BaseModel):
     """Batch operation request for multiple tasks"""
     task_ids: List[UUID] = Field(..., min_length=1, max_length=100, description="List of task IDs")
