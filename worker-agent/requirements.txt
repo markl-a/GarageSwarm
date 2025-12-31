@@ -1,5 +1,6 @@
 # HTTP & WebSocket
 httpx==0.25.2
+aiohttp==3.9.1
 websockets==12.0
 
 # AI Tool Integration

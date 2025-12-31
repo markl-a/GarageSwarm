@@ -5,13 +5,14 @@ import signal
 import sys
 from typing import Dict, Optional
 from uuid import UUID
+
 import structlog
 
+from config import load_or_create_machine_id
+from tools.base import BaseTool
 from .connection import ConnectionManager
 from .executor import TaskExecutor
 from .monitor import ResourceMonitor
-from tools.base import BaseTool
-from config import load_or_create_machine_id
 
 logger = structlog.get_logger()
 
@@ -51,7 +52,12 @@ class WorkerAgent:
         self.accepting_tasks = True
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.ws_task: Optional[asyncio.Task] = None
+        self.polling_task: Optional[asyncio.Task] = None
         self._shutdown_event: Optional[asyncio.Event] = None
+        self.use_websocket = config.get("use_websocket", True)
+        self.use_polling = config.get("use_polling_fallback", True)
+        self.polling_interval = config.get("polling_interval", 10)  # seconds
+        self.ws_connected = False  # Track WebSocket connection state
 
         # Shutdown configuration
         self.shutdown_timeout = config.get("shutdown_timeout", self.DEFAULT_SHUTDOWN_TIMEOUT)
@@ -99,13 +105,22 @@ class WorkerAgent:
             # Step 2: Start heartbeat loop
             self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-            # Step 3: Start WebSocket listener
-            self.ws_task = asyncio.create_task(self._websocket_loop())
+            # Step 3: Start WebSocket listener (if enabled)
+            if self.use_websocket:
+                self.ws_task = asyncio.create_task(self._websocket_loop())
+                logger.info("WebSocket task receiving enabled")
+
+            # Step 4: Start polling loop (if enabled and WebSocket not available)
+            if self.use_polling:
+                self.polling_task = asyncio.create_task(self._polling_loop())
+                logger.info("Polling task receiving enabled", interval=self.polling_interval)
 
             logger.info(
                 "Worker Agent started",
                 worker_id=str(self.worker_id),
-                tools=self.task_executor.get_available_tools()
+                tools=self.task_executor.get_available_tools(),
+                websocket_enabled=self.use_websocket,
+                polling_enabled=self.use_polling
             )
 
         except Exception as e:
@@ -184,6 +199,13 @@ class WorkerAgent:
             self.ws_task.cancel()
             try:
                 await self.ws_task
+            except asyncio.CancelledError:
+                pass
+
+        if self.polling_task:
+            self.polling_task.cancel()
+            try:
+                await self.polling_task
             except asyncio.CancelledError:
                 pass
 
@@ -304,21 +326,82 @@ class WorkerAgent:
             await asyncio.sleep(interval)
 
     async def _websocket_loop(self):
-        """WebSocket connection loop with reconnection"""
+        """WebSocket connection loop with auto-reconnection
+
+        The WebSocketClient handles reconnection internally with exponential backoff.
+        """
+        logger.info("Starting WebSocket connection loop")
+
+        try:
+            # Connect to WebSocket (runs indefinitely with auto-reconnect)
+            await self.connection_manager.connect_websocket(
+                worker_id=self.worker_id,
+                message_handler=self._handle_websocket_message,
+                on_connect=self._on_websocket_connect,
+                on_disconnect=self._on_websocket_disconnect
+            )
+        except asyncio.CancelledError:
+            logger.info("WebSocket loop cancelled")
+            raise
+        except Exception as e:
+            logger.error("WebSocket loop error", error=str(e))
+
+    def _on_websocket_connect(self):
+        """Callback when WebSocket connection is established"""
+        self.ws_connected = True
+        logger.info(
+            "WebSocket connected - task push enabled",
+            polling_fallback=self.use_polling
+        )
+
+    def _on_websocket_disconnect(self):
+        """Callback when WebSocket connection is lost"""
+        self.ws_connected = False
+        logger.warning(
+            "WebSocket disconnected - falling back to polling",
+            polling_enabled=self.use_polling,
+            polling_interval=self.polling_interval
+        )
+
+    async def _polling_loop(self):
+        """Polling loop for task assignments (fallback when WebSocket is disconnected)
+
+        This loop only polls when:
+        1. WebSocket is not connected (fallback mode)
+        2. Worker is not busy
+        3. Worker is accepting tasks
+        """
+        logger.info(
+            "Starting polling loop (fallback mode)",
+            interval=self.polling_interval
+        )
+
         while self.running:
             try:
-                logger.info("Establishing WebSocket connection...")
-                await self.connection_manager.connect_websocket(
-                    worker_id=self.worker_id,
-                    message_handler=self._handle_websocket_message
-                )
-            except Exception as e:
-                logger.error("WebSocket error", error=str(e))
+                # Only poll when WebSocket is disconnected
+                if not self.ws_connected:
+                    # Only poll if not currently busy and accepting tasks
+                    if not self.task_executor.is_busy and self.accepting_tasks:
+                        task_data = await self.connection_manager.poll_for_tasks(
+                            worker_id=self.worker_id
+                        )
 
-            if self.running:
-                # Reconnect after 5 seconds
-                logger.info("Reconnecting WebSocket in 5 seconds...")
-                await asyncio.sleep(5)
+                        if task_data:
+                            logger.info(
+                                "Task received via polling (fallback)",
+                                subtask_id=task_data.get("subtask_id")
+                            )
+                            # Handle the task assignment
+                            await self._handle_task_assignment(task_data)
+                else:
+                    # WebSocket is connected, skip polling
+                    logger.debug("WebSocket connected, skipping poll")
+
+            except Exception as e:
+                logger.error("Polling loop error", error=str(e))
+
+            # Wait for next polling interval
+            await asyncio.sleep(self.polling_interval)
 
     async def _handle_websocket_message(self, message: dict):
         """Handle incoming WebSocket message
@@ -366,25 +449,64 @@ class WorkerAgent:
         """Handle task assignment
 
         Args:
-            task_data: Task data from backend
+            task_data: Task data from backend containing:
+                - subtask_id: UUID of subtask
+                - description: Task description
+                - assigned_tool: Tool to use for execution
+                - context: Optional context data
         """
         subtask_id = task_data.get("subtask_id")
 
-        logger.info("Task assigned", subtask_id=subtask_id)
+        logger.info(
+            "Task assigned",
+            subtask_id=subtask_id,
+            tool=task_data.get("assigned_tool")
+        )
+
+        # Set up log streaming callback for this task
+        async def log_stream_callback(log_line: str, log_level: str):
+            """Callback to stream logs to backend"""
+            await self.connection_manager.stream_execution_log(
+                subtask_id=UUID(subtask_id),
+                log_line=log_line,
+                log_level=log_level
+            )
+
+        self.task_executor.set_log_callback(log_stream_callback)
 
         try:
-            # Execute task
+            # Step 1: Update worker status to "busy"
+            await self.connection_manager.update_worker_status(
+                worker_id=self.worker_id,
+                status="busy",
+                current_task=UUID(subtask_id) if subtask_id else None
+            )
+
+            # Step 2: Stream initial log
+            await self.connection_manager.stream_execution_log(
+                subtask_id=UUID(subtask_id),
+                log_line=f"Worker received task assignment: {task_data.get('description', '')[:100]}",
+                log_level="info"
+            )
+
+            # Step 3: Execute task (logs will be streamed via callback)
             result = await self.task_executor.execute_task(task_data)
 
-            # Report result to backend
-            await self.connection_manager.report_task_result(
-                worker_id=self.worker_id,
+            # Step 4: Stream completion log
+            await self.connection_manager.stream_execution_log(
+                subtask_id=UUID(subtask_id),
+                log_line=f"Task execution {'completed successfully' if result.get('success') else 'failed'}",
+                log_level="info" if result.get("success") else "error"
+            )
+
+            # Step 5: Upload result to backend using new endpoint
+            await self.connection_manager.upload_subtask_result(
                 subtask_id=UUID(subtask_id),
                 result=result
             )
 
             logger.info(
-                "Task result reported",
+                "Task result uploaded",
                 subtask_id=subtask_id,
                 success=result.get("success")
             )
@@ -392,29 +514,104 @@ class WorkerAgent:
         except Exception as e:
             logger.error("Task handling error", subtask_id=subtask_id, error=str(e))
 
-            # Report error
-            await self.connection_manager.report_task_result(
-                worker_id=self.worker_id,
+            # Stream error log
+            await self.connection_manager.stream_execution_log(
                 subtask_id=UUID(subtask_id),
-                result={
-                    "success": False,
-                    "output": None,
-                    "error": f"Task handling error: {str(e)}",
-                    "metadata": {}
-                }
+                log_line=f"Task handling error: {str(e)}",
+                log_level="error"
             )
 
+            # Report error using new endpoint
+            try:
+                await self.connection_manager.upload_subtask_result(
+                    subtask_id=UUID(subtask_id),
+                    result={
+                        "success": False,
+                        "output": None,
+                        "error": f"Task handling error: {str(e)}",
+                        "metadata": {}
+                    }
+                )
+            except Exception as upload_error:
+                logger.error(
+                    "Failed to upload error result",
+                    subtask_id=subtask_id,
+                    error=str(upload_error)
+                )
+
+        finally:
+            # Step 6: Update worker status back to "online"
+            await self.connection_manager.update_worker_status(
+                worker_id=self.worker_id,
+                status="online",
+                current_task=None
+            )
+
+            # Clear log callback
+            self.task_executor.set_log_callback(None)
+
     async def _handle_task_cancel(self, cancel_data: dict):
-        """Handle task cancellation request
+        """Handle task cancellation request from backend
+
+        This method cancels the currently executing task if it matches the
+        requested subtask_id.
 
         Args:
-            cancel_data: Cancellation data from backend
+            cancel_data: Cancellation data from backend containing:
+                - subtask_id: UUID of the subtask to cancel
+                - reason: Optional cancellation reason
         """
         subtask_id = cancel_data.get("subtask_id")
-        logger.warning("Task cancellation requested", subtask_id=subtask_id)
+        reason = cancel_data.get("reason", "Cancelled by backend")
 
-        # TODO: Implement task cancellation logic
-        # For now, just log it
+        logger.warning(
+            "Task cancellation requested",
+            subtask_id=subtask_id,
+            reason=reason
+        )
+
+        # Check if the current task matches the cancellation request
+        current_task_id = self.task_executor.current_task
+        if current_task_id and str(current_task_id) == str(subtask_id):
+            # Cancel the current task
+            cancelled = await self.task_executor.cancel_current_task()
+
+            if cancelled:
+                logger.info(
+                    "Task cancelled successfully",
+                    subtask_id=subtask_id,
+                    reason=reason
+                )
+
+                # Report cancellation to backend
+                try:
+                    await self.connection_manager.report_task_result(
+                        worker_id=self.worker_id,
+                        subtask_id=subtask_id,
+                        result={
+                            "success": False,
+                            "output": None,
+                            "error": f"Task cancelled: {reason}",
+                            "metadata": {"cancelled": True, "reason": reason}
+                        }
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to report task cancellation",
+                        subtask_id=subtask_id,
+                        error=str(e)
+                    )
+            else:
+                logger.warning(
+                    "Task cancellation failed",
+                    subtask_id=subtask_id
+                )
+        else:
+            logger.debug(
+                "Cancellation request does not match current task",
+                requested_subtask_id=subtask_id,
+                current_task_id=str(current_task_id) if current_task_id else None
+            )
 
     def get_status(self) -> dict:
         """Get Worker Agent status
@@ -422,12 +619,22 @@ class WorkerAgent:
         Returns:
             Status dictionary
         """
-        return {
+        status = {
             "running": self.running,
             "worker_id": str(self.worker_id) if self.worker_id else None,
             "machine_id": self.machine_id,
             "machine_name": self.config["machine_name"],
             "connected": self.connection_manager.connected,
+            "websocket_connected": self.ws_connected,
+            "websocket_enabled": self.use_websocket,
+            "polling_enabled": self.use_polling,
+            "polling_interval": self.polling_interval,
             "executor_status": self.task_executor.get_status(),
             "resources": self.resource_monitor.get_resources()
         }
+
+        # Add WebSocket client status if available
+        if self.connection_manager.ws_client:
+            status["websocket_client"] = self.connection_manager.ws_client.get_status()
+
+        return status

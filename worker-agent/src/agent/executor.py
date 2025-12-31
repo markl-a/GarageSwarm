@@ -1,8 +1,9 @@
 """Task execution management"""
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from uuid import UUID
+
 import structlog
 
 from tools.base import BaseTool
@@ -18,6 +19,10 @@ class TaskExecutor:
         self.tools: Dict[str, BaseTool] = {}
         self.current_task: Optional[UUID] = None
         self.is_busy = False
+        self.is_cancelled = False
+        self._cancel_event = asyncio.Event()
+        self._execution_task: Optional[asyncio.Task] = None
+        self.log_callback: Optional[Callable[[str, str], None]] = None
 
     def register_tool(self, name: str, tool: BaseTool):
         """Register an AI tool
@@ -58,6 +63,41 @@ class TaskExecutor:
         """
         return tool_name in self.tools
 
+    def set_log_callback(self, callback: Callable[[str, str], None]):
+        """Set callback function for streaming execution logs
+
+        Args:
+            callback: Async function that takes (log_line, log_level) as parameters
+        """
+        self.log_callback = callback
+
+    async def _log(self, message: str, level: str = "info"):
+        """Internal logging method that streams to backend if callback is set
+
+        Args:
+            message: Log message
+            level: Log level (debug, info, warning, error)
+        """
+        # Always log locally
+        if level == "debug":
+            logger.debug(message)
+        elif level == "info":
+            logger.info(message)
+        elif level == "warning":
+            logger.warning(message)
+        elif level == "error":
+            logger.error(message)
+
+        # Stream to backend if callback is set
+        if self.log_callback:
+            try:
+                if asyncio.iscoroutinefunction(self.log_callback):
+                    await self.log_callback(message, level)
+                else:
+                    self.log_callback(message, level)
+            except Exception as e:
+                logger.debug(f"Failed to stream log: {e}")
+
     async def execute_task(self, subtask: dict) -> dict:
         """Execute a subtask using the assigned tool
 
@@ -80,26 +120,32 @@ class TaskExecutor:
         description = subtask.get("description")
         context = subtask.get("context", {})
 
-        logger.info(
-            "Executing task",
-            subtask_id=str(subtask_id),
-            tool=tool_name
+        # Reset cancellation state for new task
+        self.reset_cancellation()
+
+        await self._log(
+            f"Executing task {subtask_id} with tool {tool_name}",
+            level="info"
         )
 
         # Validation
         if not tool_name:
+            error_msg = "No tool assigned to subtask"
+            await self._log(error_msg, level="error")
             return {
                 "success": False,
                 "output": None,
-                "error": "No tool assigned to subtask",
+                "error": error_msg,
                 "metadata": {}
             }
 
         if tool_name not in self.tools:
+            error_msg = f"Tool '{tool_name}' not available. Available tools: {list(self.tools.keys())}"
+            await self._log(error_msg, level="error")
             return {
                 "success": False,
                 "output": None,
-                "error": f"Tool '{tool_name}' not available. Available tools: {list(self.tools.keys())}",
+                "error": error_msg,
                 "metadata": {}
             }
 
@@ -108,8 +154,22 @@ class TaskExecutor:
         self.current_task = subtask_id
 
         try:
+            # Check for cancellation before starting
+            if self.is_cancelled:
+                return {
+                    "success": False,
+                    "output": None,
+                    "error": "Task was cancelled before execution",
+                    "metadata": {"cancelled": True}
+                }
+
             # Get tool and execute
             tool = self.tools[tool_name]
+
+            await self._log(
+                f"Starting execution with {tool_name}",
+                level="info"
+            )
 
             # Execute task
             result = await tool.execute(
@@ -117,25 +177,39 @@ class TaskExecutor:
                 context=context
             )
 
-            logger.info(
-                "Task execution completed",
-                subtask_id=str(subtask_id),
-                success=result.get("success")
+            # Check for cancellation after execution
+            if self.is_cancelled:
+                return {
+                    "success": False,
+                    "output": result.get("output"),
+                    "error": "Task was cancelled during execution",
+                    "metadata": {"cancelled": True, "partial_result": True}
+                }
+
+            await self._log(
+                f"Task execution {'completed successfully' if result.get('success') else 'failed'}",
+                level="info" if result.get("success") else "warning"
             )
 
             return result
 
+        except asyncio.CancelledError:
+            await self._log("Task execution was cancelled", level="warning")
+            return {
+                "success": False,
+                "output": None,
+                "error": "Task execution was cancelled",
+                "metadata": {"cancelled": True}
+            }
+
         except Exception as e:
-            logger.error(
-                "Task execution failed",
-                subtask_id=str(subtask_id),
-                error=str(e)
-            )
+            error_msg = f"Execution error: {str(e)}"
+            await self._log(error_msg, level="error")
 
             return {
                 "success": False,
                 "output": None,
-                "error": f"Execution error: {str(e)}",
+                "error": error_msg,
                 "metadata": {"exception_type": type(e).__name__}
             }
 
@@ -143,6 +217,7 @@ class TaskExecutor:
             # Mark as not busy
             self.is_busy = False
             self.current_task = None
+            self._execution_task = None
 
     async def execute_task_with_timeout(
         self,
@@ -187,5 +262,54 @@ class TaskExecutor:
             "is_busy": self.is_busy,
             "current_task": str(self.current_task) if self.current_task else None,
             "available_tools": list(self.tools.keys()),
-            "tool_count": len(self.tools)
+            "tool_count": len(self.tools),
+            "is_cancelled": self.is_cancelled
         }
+
+    async def cancel_current_task(self) -> bool:
+        """Cancel the currently executing task
+
+        Returns:
+            True if a task was cancelled, False if no task was running
+        """
+        if not self.is_busy or not self.current_task:
+            logger.info("No task to cancel")
+            return False
+
+        task_id = self.current_task
+        logger.info("Cancelling task", task_id=str(task_id))
+
+        # Set cancellation flag
+        self.is_cancelled = True
+        self._cancel_event.set()
+
+        # Cancel the execution task if it exists
+        if self._execution_task and not self._execution_task.done():
+            self._execution_task.cancel()
+            try:
+                await self._execution_task
+            except asyncio.CancelledError:
+                logger.info("Task execution cancelled", task_id=str(task_id))
+
+        # Cancel any tool-level execution
+        for tool_name, tool in self.tools.items():
+            if hasattr(tool, 'cancel'):
+                try:
+                    await tool.cancel()
+                    logger.debug("Tool cancelled", tool=tool_name)
+                except Exception as e:
+                    logger.warning("Failed to cancel tool", tool=tool_name, error=str(e))
+
+        # Reset state
+        self.is_busy = False
+        self.current_task = None
+        self._execution_task = None
+        self._cancel_event.clear()
+
+        await self._log(f"Task {task_id} cancelled successfully", level="info")
+        return True
+
+    def reset_cancellation(self):
+        """Reset cancellation state for new task"""
+        self.is_cancelled = False
+        self._cancel_event.clear()

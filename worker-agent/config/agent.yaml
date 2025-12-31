@@ -1,0 +1,53 @@
+# Worker Agent Configuration
+
+# Backend Connection
+# Worker 在本機直接連 localhost
+backend_url: "http://localhost:8002"
+
+# 手機/外部存取用 ngrok URL:
+# https://d4b22acc8896.ngrok-free.app
+
+# Machine Information
+machine_name: "Local Dev Machine"
+
+# Heartbeat Interval (seconds)
+heartbeat_interval: 30
+
+# Available AI Tools
+tools:
+  - claude_code
+  - gemini_cli
+  # - ollama  # Uncomment if Ollama is installed
+
+# AI Tool Configurations
+claude:
+  api_key: "${ANTHROPIC_API_KEY}"
+  model: "claude-3-sonnet-20240229"
+  max_tokens: 4096
+
+gemini:
+  api_key: "${GOOGLE_API_KEY}"
+  model: "gemini-pro"
+
+ollama:
+  base_url: "http://localhost:11434"
+  model: "codellama"
+
+# Resource Monitoring
+resource_monitoring:
+  enabled: true
+  cpu_threshold: 90  # Alert if CPU > 90%
+  memory_threshold: 85  # Alert if Memory > 85%
+  disk_threshold: 90  # Alert if Disk > 90%
+
+# Task Execution
+task_execution:
+  max_concurrent_tasks: 3
+  timeout_seconds: 600  # 10 minutes
+  retry_attempts: 3
+
+# Logging
+logging:
+  level: INFO
+  format: json
+  file: logs/worker-agent.log

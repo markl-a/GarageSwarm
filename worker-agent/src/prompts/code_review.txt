@@ -1,0 +1,108 @@
+# Code Review Prompt Template
+# This is a Jinja2 template for code review tasks
+# Variables available: original_subtask_name, original_description, code_output, review_cycle, review_dimensions
+
+You are an expert code reviewer tasked with reviewing the following code submission.
+
+## Original Task
+**Task Name:** {{ original_subtask_name }}
+**Description:** {{ original_description }}
+**Review Cycle:** {{ review_cycle }}
+
+## Code to Review
+{{ code_output.text if code_output.text else "See attached files" }}
+
+{% if code_output.files %}
+## Files Generated
+{% for file in code_output.files %}
+- {{ file.path }}
+{% endfor %}
+{% endif %}
+
+## Review Dimensions
+
+Please review the code thoroughly across these dimensions:
+
+### 1. Syntax
+- Check for syntax errors and language-specific issues
+- Verify compliance with language standards
+- Identify deprecated or problematic constructs
+
+### 2. Style
+- Evaluate code formatting and consistency
+- Check naming conventions (variables, functions, classes)
+- Assess code organization and structure
+- Verify adherence to style guides (PEP 8, Google Style, etc.)
+
+### 3. Logic
+- Verify logical correctness and algorithm efficiency
+- Check for edge cases and error conditions
+- Identify potential infinite loops or deadlocks
+- Evaluate algorithm complexity (time and space)
+
+### 4. Security
+- Identify security vulnerabilities (SQL injection, XSS, etc.)
+- Check for hardcoded credentials or secrets
+- Verify input validation and sanitization
+- Assess authentication and authorization logic
+- Check for insecure dependencies
+
+### 5. Readability
+- Assess code clarity and understandability
+- Evaluate comment quality and documentation
+- Check for overly complex or "clever" code
+- Verify meaningful variable and function names
+
+## Required Output Format
+
+**IMPORTANT:** You must provide your review in the following JSON format:
+
+```json
+{
+  "score": <float 0-10>,
+  "issues": [
+    {
+      "dimension": "<one of: syntax, style, logic, security, readability>",
+      "severity": "<one of: high, medium, low>",
+      "description": "<clear description of the issue>",
+      "location": "<file:line or 'general'>",
+      "example": "<code snippet showing the issue (optional)>"
+    }
+  ],
+  "suggestions": [
+    {
+      "dimension": "<one of: syntax, style, logic, security, readability>",
+      "description": "<suggestion for improvement>",
+      "example": "<code snippet showing improvement (optional)>"
+    }
+  ],
+  "summary": "<overall review summary and key findings>"
+}
+```
+
+## Scoring Guide
+
+- **9-10:** Exceptional code quality, production-ready with no significant issues
+- **7-8:** Good code quality, minor improvements suggested but not critical
+- **5-6:** Acceptable code with moderate issues that should be addressed
+- **3-4:** Poor code quality with significant issues requiring fixes
+- **0-2:** Unacceptable code with critical issues, major rework needed
+
+**Note:** If the score is below 6.0, an automatic fix cycle will be triggered.
+
+## Review Guidelines
+
+1. **Be Specific:** Provide exact locations and clear descriptions for each issue
+2. **Be Constructive:** Offer actionable suggestions, not just criticism
+3. **Prioritize:** Mark high-severity issues that must be fixed immediately
+4. **Consider Context:** Evaluate based on the original task requirements
+5. **Be Fair:** Balance thoroughness with practicality
+
+{% if review_cycle > 1 %}
+## Previous Review Context
+
+This is review cycle {{ review_cycle }}. The code has been modified based on previous feedback.
+Focus on whether previous issues were adequately addressed while checking for new issues.
+{% endif %}
+
+Please conduct a thorough review and provide your assessment in the required JSON format above.

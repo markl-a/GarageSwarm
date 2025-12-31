@@ -1,0 +1,85 @@
+# Code Fix Prompt Template
+# This is a Jinja2 template for code fix tasks
+# Variables available: original_subtask_name, original_description, original_code, review_report, review_cycle, issues_to_fix, suggestions
+
+You are tasked with fixing code based on review feedback.
+
+## Original Task
+**Task Name:** {{ original_subtask_name }}
+**Description:** {{ original_description }}
+**Review Cycle:** {{ review_cycle }}
+
+## Review Score
+**Current Score:** {{ review_report.score }}/10
+**Threshold:** 6.0
+**Status:** Below threshold - fixes required
+
+## Original Code
+{{ original_code.text if original_code.text else "See files below" }}
+
+{% if original_code.files %}
+## Files to Fix
+{% for file in original_code.files %}
+- {{ file.path }}
+{% endfor %}
+{% endif %}
+
+## Critical Issues to Address
+
+{% for issue in issues_to_fix %}
+### Issue {{ loop.index }}: {{ issue.dimension|upper }} - [{{ issue.severity|upper }}]
+**Description:** {{ issue.description }}
+**Location:** {{ issue.location }}
+{% if issue.example %}
+**Example:**
+```
+{{ issue.example }}
+```
+{% endif %}
+
+{% endfor %}
+
+## Suggestions for Improvement
+
+{% for suggestion in suggestions %}
+### Suggestion {{ loop.index }}: {{ suggestion.dimension|upper }}
+{{ suggestion.description }}
+{% if suggestion.example %}
+**Example:**
+```
+{{ suggestion.example }}
+```
+{% endif %}
+
+{% endfor %}
+
+## Review Summary
+{{ review_report.summary }}
+
+## Fix Requirements
+
+1. **Address All High-Severity Issues:** These must be fixed
+2. **Address Medium-Severity Issues:** Fix if possible
+3. **Implement Key Suggestions:** Apply improvements that enhance quality
+4. **Maintain Functionality:** Ensure original requirements are still met
+5. **Preserve Working Code:** Don't break what's already correct
+6. **Test Your Changes:** Verify fixes don't introduce new issues
+
+## Expected Output
+
+Please provide:
+1. **Fixed code** with all critical issues resolved
+2. **Brief summary** of changes made
+3. **Verification** that original functionality is preserved
+
+Your fixes should result in a review score of 6.0 or higher.
+
+{% if review_cycle > 1 %}
+## Note on Review Cycles
+
+This is fix cycle {{ review_cycle }}. Maximum cycles allowed: 2.
+If this fix doesn't meet the threshold, the task will be escalated to human review.
+Please ensure this fix addresses all critical issues comprehensively.
+{% endif %}
+
+Begin implementing the fixes now.

@@ -8,6 +8,8 @@ import httpx
 import websockets
 import structlog
 
+from .websocket_client import WebSocketClient
+
 logger = structlog.get_logger()
 
 
@@ -26,6 +28,9 @@ class ConnectionManager:
         self.ws_url = self.backend_url.replace("http://", "ws://").replace("https://", "wss://")
         self.connected = False
 
+        # WebSocket client instance
+        self.ws_client: Optional[WebSocketClient] = None
+
     async def connect(self):
         """Initialize HTTP client"""
         if self.client is None:
@@ -38,11 +43,19 @@ class ConnectionManager:
 
     async def close(self):
         """Close HTTP and WebSocket connections"""
+        # Close WebSocket client
+        if self.ws_client:
+            await self.ws_client.disconnect()
+            self.ws_client = None
+            logger.info("WebSocket client closed")
+
+        # Close HTTP client
         if self.client:
             await self.client.aclose()
             self.client = None
             logger.info("HTTP client closed")
 
+        # Close legacy WebSocket (if any)
         if self.ws:
             await self.ws.close()
             self.ws = None
@@ -169,41 +182,48 @@ class ConnectionManager:
     async def connect_websocket(
         self,
         worker_id: UUID,
-        message_handler: Callable[[dict], Any]
+        message_handler: Callable[[dict], Any],
+        on_connect: Optional[Callable[[], Any]] = None,
+        on_disconnect: Optional[Callable[[], Any]] = None
     ):
-        """Connect to WebSocket and listen for messages
+        """Connect to WebSocket with auto-reconnect and heartbeat
 
         Args:
             worker_id: Worker UUID
             message_handler: Async function to handle incoming messages
+            on_connect: Optional callback when connection established
+            on_disconnect: Optional callback when connection lost
 
-        Raises:
-            websockets.WebSocketException: If connection fails
+        Note:
+            This method will run indefinitely with automatic reconnection.
+            Call disconnect_websocket() to stop the connection.
         """
-        ws_endpoint = f"{self.ws_url}/api/v1/workers/{worker_id}/ws"
-        logger.info("Connecting to WebSocket", url=ws_endpoint)
+        # Create WebSocket client if not already created
+        if self.ws_client is None:
+            self.ws_client = WebSocketClient(
+                ws_url=self.ws_url,
+                worker_id=worker_id,
+                message_handler=message_handler,
+                on_connect=on_connect,
+                on_disconnect=on_disconnect
+            )
 
-        try:
-            async with websockets.connect(ws_endpoint) as websocket:
-                self.ws = websocket
-                logger.info("WebSocket connected")
+        # Connect (this will run indefinitely with auto-reconnect)
+        await self.ws_client.connect()
 
-                async for message in websocket:
-                    try:
-                        data = json.loads(message)
-                        await message_handler(data)
-                    except json.JSONDecodeError:
-                        logger.error("Invalid JSON message", message=message)
-                    except Exception as e:
-                        logger.error("Error handling message", error=str(e))
+    async def disconnect_websocket(self):
+        """Disconnect WebSocket client gracefully"""
+        if self.ws_client:
+            await self.ws_client.disconnect()
+            self.ws_client = None
 
-        except websockets.ConnectionClosed:
-            logger.warning("WebSocket connection closed")
-            self.ws = None
-        except Exception as e:
-            logger.error("WebSocket connection error", error=str(e))
-            self.ws = None
-            raise
+    def is_websocket_connected(self) -> bool:
+        """Check if WebSocket is currently connected
+
+        Returns:
+            True if connected, False otherwise
+        """
+        return self.ws_client is not None and self.ws_client.is_connected()
 
     async def send_websocket_message(self, message: dict):
         """Send message via WebSocket
@@ -211,13 +231,17 @@ class ConnectionManager:
         Args:
             message: Message dictionary to send
 
-        Raises:
-            RuntimeError: If WebSocket not connected
+        Note:
+            If WebSocket is not connected, the message will be queued
+            for sending when the connection is re-established.
         """
-        if not self.ws:
-            raise RuntimeError("WebSocket not connected")
-
-        await self.ws.send(json.dumps(message))
+        if self.ws_client:
+            await self.ws_client.send_message(message)
+        else:
+            logger.warning(
+                "WebSocket client not initialized, message not sent",
+                message_type=message.get("type")
+            )
 
     async def unregister(self, worker_id: UUID) -> bool:
         """Unregister worker from backend (graceful shutdown)
@@ -276,4 +300,195 @@ class ConnectionManager:
             return True
         except Exception as e:
             logger.error("Failed to send final heartbeat", worker_id=str(worker_id), error=str(e))
+            return False
+
+    async def poll_for_tasks(self, worker_id: UUID) -> Optional[dict]:
+        """Poll backend for pending task assignments (fallback when WebSocket unavailable)
+
+        Args:
+            worker_id: Worker UUID
+
+        Returns:
+            Task assignment dictionary or None if no tasks available
+
+        Raises:
+            httpx.HTTPError: If polling fails
+        """
+        if not self.client:
+            await self.connect()
+
+        try:
+            response = await self.client.get(
+                f"/api/v1/workers/{worker_id}/tasks",
+                timeout=10.0
+            )
+
+            # 204 No Content means no tasks available
+            if response.status_code == 204:
+                return None
+
+            response.raise_for_status()
+            task_data = response.json()
+
+            logger.info(
+                "Task polled from backend",
+                worker_id=str(worker_id),
+                subtask_id=task_data.get("subtask_id")
+            )
+
+            return task_data
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                # Worker not found or no tasks available
+                return None
+            logger.error("Task polling failed", worker_id=str(worker_id), error=str(e))
+            raise
+        except Exception as e:
+            logger.error("Task polling error", worker_id=str(worker_id), error=str(e))
+            raise
+
+    async def upload_subtask_result(
+        self,
+        subtask_id: UUID,
+        result: dict
+    ) -> dict:
+        """Upload subtask execution result to backend
+
+        Args:
+            subtask_id: Subtask UUID
+            result: Result dictionary containing:
+                - success: bool
+                - output: Any - Execution output
+                - error: Optional[str] - Error message if failed
+                - metadata: dict - Execution metadata
+                - execution_time: float - Execution time in seconds (optional)
+
+        Returns:
+            Backend response dictionary
+
+        Raises:
+            httpx.HTTPError: If upload fails
+        """
+        if not self.client:
+            await self.connect()
+
+        # Convert internal result format to backend SubtaskResultRequest format
+        success = result.get("success", False)
+        request_body = {
+            "status": "completed" if success else "failed",
+            "result": {
+                "output": result.get("output"),
+                "metadata": result.get("metadata", {})
+            },
+            "execution_time": result.get("execution_time", 0.0),
+            "error": result.get("error") if not success else None
+        }
+
+        logger.info(
+            "Uploading subtask result",
+            subtask_id=str(subtask_id),
+            success=success,
+            status=request_body["status"]
+        )
+
+        response = await self.client.post(
+            f"/api/v1/subtasks/{subtask_id}/result",
+            json=request_body
+        )
+        response.raise_for_status()
+
+        logger.info("Subtask result uploaded successfully", subtask_id=str(subtask_id))
+        return response.json()
+
+    async def stream_execution_log(
+        self,
+        subtask_id: UUID,
+        log_line: str,
+        log_level: str = "info",
+        metadata: Optional[dict] = None
+    ) -> bool:
+        """Stream execution log line to backend in real-time
+
+        Args:
+            subtask_id: Subtask UUID
+            log_line: Log message/line to stream
+            log_level: Log level (debug, info, warning, error)
+            metadata: Optional metadata dictionary
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            await self.connect()
+
+        try:
+            response = await self.client.post(
+                f"/api/v1/subtasks/{subtask_id}/logs",
+                json={
+                    "log_line": log_line,
+                    "log_level": log_level,
+                    "metadata": metadata or {}
+                },
+                timeout=5.0  # Short timeout for log streaming
+            )
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            # Don't raise - log streaming is non-critical
+            logger.debug(
+                "Failed to stream log",
+                subtask_id=str(subtask_id),
+                error=str(e)
+            )
+            return False
+
+    async def update_worker_status(
+        self,
+        worker_id: UUID,
+        status: str,
+        current_task: Optional[UUID] = None
+    ) -> bool:
+        """Update worker status (online/busy/idle)
+
+        Args:
+            worker_id: Worker UUID
+            status: Worker status (online, busy, idle)
+            current_task: Optional current task UUID if busy
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            await self.connect()
+
+        try:
+            # Use heartbeat endpoint for status updates
+            resources = {"cpu_percent": 0, "memory_percent": 0, "disk_percent": 0}
+
+            response = await self.client.post(
+                f"/api/v1/workers/{worker_id}/heartbeat",
+                json={
+                    "status": status,
+                    "resources": resources,
+                    "current_task": str(current_task) if current_task else None
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+
+            logger.debug(
+                "Worker status updated",
+                worker_id=str(worker_id),
+                status=status,
+                current_task=str(current_task) if current_task else None
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Failed to update worker status",
+                worker_id=str(worker_id),
+                status=status,
+                error=str(e)
+            )
             return False
