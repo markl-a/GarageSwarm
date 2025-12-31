@@ -86,6 +86,8 @@ Epic 7: Evaluation Framework  ├→ 可並行
 Epic 8: Human Checkpoints ───┘
   ↓
 Epic 9: Testing & Launch
+  ↓
+Epic 10: Stability & Security ← 深度審查後新增
 ```
 
 ### Success Metrics per Epic
@@ -101,6 +103,24 @@ Epic 9: Testing & Launch
 - **Epic 7**: Agent 輸出能夠自動評分（3 個維度）
 - **Epic 8**: 用戶能夠在檢查點介入並糾偏
 - **Epic 9**: 平台通過所有測試，文檔完整，準備發布
+- **Epic 10**: 所有 Critical/High 問題已修復，測試覆蓋 80%，安全審計通過
+
+---
+
+## Epic 10: 安全修復與穩定性強化 (新增)
+
+**Epic Goal:** 修復深度代碼審查發現的 200 個問題，確保系統達到生產環境就緒狀態。
+
+**詳細文檔:** [epic-10-stability-security.md](./epic-10-stability-security.md)
+
+**Stories:**
+- Story 10.1: 安全漏洞緊急修復 (CORS, WebSocket, 密鑰)
+- Story 10.2: 數據庫遷移衝突修復
+- Story 10.3: Backend API 認證強化
+- Story 10.4: Worker Agent 核心功能完善
+- Story 10.5: 關鍵模組測試套件
+- Story 10.6: Services 層錯誤修復
+- Story 10.7: Configuration 與環境變數修復
 
 ---
 
