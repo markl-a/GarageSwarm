@@ -125,6 +125,14 @@ class PoolMonitor:
         try:
             pool = self.db_engine.pool
 
+            # Check if pool supports metrics (NullPool doesn't)
+            if not hasattr(pool, 'size') or not callable(getattr(pool, 'size', None)):
+                return PoolMetrics(
+                    pool_name="database",
+                    is_healthy=True,
+                    warning_message="Pool metrics unavailable (NullPool in use)"
+                )
+
             # SQLAlchemy pool status
             pool_size = pool.size()
             checked_in = pool.checkedin()
