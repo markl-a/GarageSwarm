@@ -4,9 +4,13 @@ Health Check API
 Health check endpoints for monitoring service status.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 import redis.asyncio as redis
-from sqlalchemy import text
+from sqlalchemy import text, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.dependencies import get_db, get_redis_client
@@ -14,7 +18,54 @@ from src.config import get_settings, Settings
 from src.logging_config import get_logger
 from src.auth.dependencies import require_auth
 from src.models.user import User
+from src.models.task import Task
+from src.models.worker import Worker
 from src.services.pool_monitor import get_pool_monitor
+
+
+# Dashboard response schemas
+class ServiceStatus(BaseModel):
+    """Individual service status"""
+    name: str
+    status: str = Field(..., description="connected/disconnected/degraded")
+    latency_ms: Optional[float] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemMetrics(BaseModel):
+    """System-level metrics"""
+    active_tasks: int = 0
+    pending_tasks: int = 0
+    online_workers: int = 0
+    queue_depth: int = 0
+
+
+class DashboardResponse(BaseModel):
+    """Comprehensive dashboard response"""
+    status: str = Field(..., description="healthy/degraded/unhealthy")
+    timestamp: datetime
+    uptime_seconds: Optional[float] = None
+    services: List[ServiceStatus]
+    metrics: SystemMetrics
+    pools: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+
+
+# Track application start time
+_app_start_time: Optional[datetime] = None
+
+
+def set_app_start_time():
+    """Set application start time (called from lifespan)"""
+    global _app_start_time
+    _app_start_time = datetime.utcnow()
+
+
+def get_uptime_seconds() -> Optional[float]:
+    """Get application uptime in seconds"""
+    if _app_start_time:
+        return (datetime.utcnow() - _app_start_time).total_seconds()
+    return None
 
 logger = get_logger(__name__)
 
@@ -279,3 +330,154 @@ async def pool_metrics(
             response["history"][name] = monitor.get_history(name, limit=limit)
 
     return response
+
+
+@router.get("/health/dashboard", response_model=DashboardResponse)
+async def health_dashboard(
+    db: AsyncSession = Depends(get_db),
+    redis_client: redis.Redis = Depends(get_redis_client),
+    settings: Settings = Depends(get_settings),
+    current_user: User = Depends(require_auth),
+):
+    """
+    Comprehensive health dashboard
+
+    Aggregates all system health information into a single view:
+    - Service connectivity status with latency
+    - System metrics (tasks, workers, queue)
+    - Connection pool utilization
+    - Active warnings and alerts
+
+    Ideal for monitoring dashboards and alerting systems.
+    """
+    import time
+
+    warnings: List[str] = []
+    services: List[ServiceStatus] = []
+    overall_status = "healthy"
+
+    # Check database with latency measurement
+    db_start = time.perf_counter()
+    try:
+        result = await db.execute(text("SELECT current_database(), version()"))
+        row = result.first()
+        db_latency = (time.perf_counter() - db_start) * 1000
+
+        services.append(ServiceStatus(
+            name="database",
+            status="connected",
+            latency_ms=round(db_latency, 2),
+            details={
+                "database": row[0] if row else "unknown",
+                "version": row[1].split(",")[0] if row else "unknown"
+            }
+        ))
+
+        if db_latency > 100:
+            warnings.append(f"Database latency high: {db_latency:.0f}ms")
+            overall_status = "degraded"
+    except Exception as e:
+        services.append(ServiceStatus(
+            name="database",
+            status="disconnected",
+            details={"error": str(e)}
+        ))
+        overall_status = "unhealthy"
+        warnings.append(f"Database disconnected: {str(e)[:100]}")
+
+    # Check Redis with latency measurement
+    redis_start = time.perf_counter()
+    try:
+        await redis_client.ping()
+        info = await redis_client.info()
+        redis_latency = (time.perf_counter() - redis_start) * 1000
+
+        services.append(ServiceStatus(
+            name="redis",
+            status="connected",
+            latency_ms=round(redis_latency, 2),
+            details={
+                "version": info.get("redis_version", "unknown"),
+                "clients": info.get("connected_clients", 0),
+                "memory": info.get("used_memory_human", "unknown"),
+                "uptime_days": info.get("uptime_in_days", 0)
+            }
+        ))
+
+        if redis_latency > 50:
+            warnings.append(f"Redis latency high: {redis_latency:.0f}ms")
+            if overall_status == "healthy":
+                overall_status = "degraded"
+    except Exception as e:
+        services.append(ServiceStatus(
+            name="redis",
+            status="disconnected",
+            details={"error": str(e)}
+        ))
+        overall_status = "unhealthy"
+        warnings.append(f"Redis disconnected: {str(e)[:100]}")
+
+    # Get system metrics
+    metrics = SystemMetrics()
+    try:
+        # Active tasks (in_progress + initializing)
+        active_result = await db.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.status.in_(["in_progress", "initializing"]))
+        )
+        metrics.active_tasks = active_result.scalar() or 0
+
+        # Pending tasks
+        pending_result = await db.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.status == "pending")
+        )
+        metrics.pending_tasks = pending_result.scalar() or 0
+
+        # Online workers
+        online_result = await db.execute(
+            select(func.count())
+            .select_from(Worker)
+            .where(Worker.status.in_(["online", "busy", "idle"]))
+        )
+        metrics.online_workers = online_result.scalar() or 0
+
+        # Queue depth from Redis
+        try:
+            queue_len = await redis_client.llen("task_queue")
+            metrics.queue_depth = queue_len or 0
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("Failed to fetch system metrics", error=str(e))
+        warnings.append("Could not fetch some system metrics")
+
+    # Get pool metrics
+    pools: Dict[str, Any] = {}
+    monitor = get_pool_monitor()
+    if monitor:
+        try:
+            pool_health = await monitor.check_health()
+            pools = pool_health.get("pools", {})
+
+            # Add pool warnings
+            for pool_name, pool_data in pools.items():
+                if not pool_data.get("is_healthy", True):
+                    warning = pool_data.get("warning", f"{pool_name} pool unhealthy")
+                    warnings.append(warning)
+                    if overall_status == "healthy":
+                        overall_status = "degraded"
+        except Exception as e:
+            logger.warning("Failed to get pool metrics", error=str(e))
+
+    return DashboardResponse(
+        status=overall_status,
+        timestamp=datetime.utcnow(),
+        uptime_seconds=get_uptime_seconds(),
+        services=services,
+        metrics=metrics,
+        pools=pools,
+        warnings=warnings
+    )

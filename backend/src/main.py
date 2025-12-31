@@ -22,6 +22,7 @@ from src.services.pool_monitor import PoolMonitor, set_pool_monitor
 
 # Import API routers
 from src.api.v1 import health
+from src.api.v1.health import set_app_start_time
 from src.api.v1 import workers
 from src.api.v1 import tasks
 from src.api.v1 import subtasks
@@ -32,6 +33,7 @@ from src.api.v1 import auth
 from src.api.v1 import metrics
 from src.api.v1 import templates
 from src.api.v1 import mobile_ui
+from src.api.v1 import diagnostics
 
 # Global Redis client
 redis_client: RedisClient = None
@@ -53,6 +55,9 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("🚀 Starting Multi-Agent on the Web API", version=settings.APP_VERSION)
+
+    # Record app start time for uptime tracking
+    set_app_start_time()
 
     # Initialize database connection
     try:
@@ -124,15 +129,105 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Shutdown complete")
 
 
+# OpenAPI Tags for better documentation organization
+openapi_tags = [
+    {
+        "name": "Health",
+        "description": "System health checks and monitoring endpoints",
+    },
+    {
+        "name": "Authentication",
+        "description": "User registration, login, and token management",
+    },
+    {
+        "name": "Tasks",
+        "description": "Task creation, management, and lifecycle operations",
+    },
+    {
+        "name": "Subtasks",
+        "description": "Subtask execution and result submission",
+    },
+    {
+        "name": "Workers",
+        "description": "Worker registration, heartbeat, and status management",
+    },
+    {
+        "name": "Checkpoints",
+        "description": "Task checkpoints for human review and rollback",
+    },
+    {
+        "name": "Evaluations",
+        "description": "Code quality evaluation and scoring",
+    },
+    {
+        "name": "Templates",
+        "description": "Reusable workflow templates for common tasks",
+    },
+    {
+        "name": "WebSocket",
+        "description": "Real-time communication channels",
+    },
+    {
+        "name": "Metrics",
+        "description": "Prometheus metrics endpoint",
+    },
+    {
+        "name": "Mobile UI",
+        "description": "Mobile-optimized UI endpoints",
+    },
+    {
+        "name": "Diagnostics",
+        "description": "Developer tools for debugging and troubleshooting (DEBUG mode only)",
+    },
+]
+
 # Create FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
-    description="Distributed Multi-Agent Orchestration Platform with 2-3x speed boost and 4-layer quality assurance",
+    description="""
+## Multi-Agent Orchestration Platform
+
+Distributed AI agent orchestration system with:
+- **2-3x Speed Boost**: Parallel subtask execution across multiple workers
+- **4-Layer Quality Assurance**: Code quality, security, architecture, and testability evaluation
+- **Human-in-the-Loop**: Checkpoint-based review system with rollback support
+
+### Quick Start
+
+1. **Register**: `POST /api/v1/auth/register`
+2. **Login**: `POST /api/v1/auth/login` → Get JWT token
+3. **Create Task**: `POST /api/v1/tasks` with Authorization header
+4. **Monitor**: `GET /api/v1/tasks/{id}` or WebSocket `/api/v1/ws/{task_id}`
+
+### Key Features
+
+- **Task Decomposition**: Automatic breakdown into parallelizable subtasks
+- **Worker Management**: Dynamic worker registration and load balancing
+- **Real-time Updates**: WebSocket and Redis Pub/Sub for live status
+- **Batch Operations**: Cancel or update multiple tasks at once
+- **Analytics**: System-wide metrics and performance insights
+
+### Authentication
+
+All endpoints (except health checks) require JWT authentication:
+```
+Authorization: Bearer <your_token>
+```
+    """,
     version=settings.APP_VERSION,
     lifespan=lifespan,
-    docs_url="/docs" if settings.DEBUG else None,  # Disable docs in production
+    docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
     openapi_url="/openapi.json" if settings.DEBUG else None,
+    openapi_tags=openapi_tags,
+    contact={
+        "name": "BMAD Support",
+        "email": "support@bmad.dev",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 # Prometheus Metrics Middleware (register first to capture all requests)
@@ -196,6 +291,7 @@ app.include_router(evaluations.router, prefix="/api/v1", tags=["Evaluations"])
 app.include_router(templates.router, prefix="/api/v1", tags=["Templates"])
 app.include_router(metrics.router, tags=["Metrics"])
 app.include_router(mobile_ui.router, prefix="/mobile", tags=["Mobile UI"])
+app.include_router(diagnostics.router, prefix="/api/v1", tags=["Diagnostics"])
 
 logger.info("FastAPI application configured", debug=settings.DEBUG)
 

@@ -26,6 +26,27 @@ from src.middleware.request_id import get_request_id
 logger = structlog.get_logger(__name__)
 
 
+def _log_to_diagnostics(
+    message: str,
+    error_code: str = None,
+    request_id: str = None,
+    path: str = None,
+    details: dict = None
+):
+    """Log error to diagnostics system (if available)"""
+    try:
+        from src.api.v1.diagnostics import log_error_for_diagnostics
+        log_error_for_diagnostics(
+            message=message,
+            error_code=error_code,
+            request_id=request_id,
+            path=path,
+            details=details
+        )
+    except ImportError:
+        pass  # Diagnostics module not available
+
+
 def _build_error_response(
     status_code: int,
     error_code: str,
@@ -85,6 +106,15 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
         details=exc.details,
         retryable=exc.retryable,
         exc_info=exc.status_code >= 500  # Only include stack trace for server errors
+    )
+
+    # Log to diagnostics for API retrieval
+    _log_to_diagnostics(
+        message=exc.message,
+        error_code=exc.error_code.value,
+        request_id=request_id,
+        path=request.url.path,
+        details=exc.details
     )
 
     response_content = _build_error_response(
@@ -236,6 +266,15 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         error_type=type(exc).__name__,
         error=str(exc),
         exc_info=True  # Include full stack trace
+    )
+
+    # Log to diagnostics for API retrieval
+    _log_to_diagnostics(
+        message=f"Unhandled exception: {type(exc).__name__}: {str(exc)[:200]}",
+        error_code=ErrorCode.INTERNAL_ERROR.value,
+        request_id=request_id,
+        path=request.url.path,
+        details={"type": type(exc).__name__}
     )
 
     # In production, hide internal error details
