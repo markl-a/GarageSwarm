@@ -689,3 +689,285 @@ class CheckpointService:
             "eligible": True,
             "reason": "task_eligible"
         }
+
+    async def rollback_to_checkpoint(
+        self,
+        checkpoint_id: UUID,
+        reason: Optional[str] = None,
+        reset_evaluations: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Rollback task state to a specific checkpoint.
+
+        This operation:
+        1. Identifies all subtasks completed AFTER the checkpoint
+        2. Resets those subtasks to 'pending' status
+        3. Clears their output and error fields
+        4. Optionally clears evaluations for those subtasks
+        5. Updates task progress accordingly
+        6. Creates audit trail for the rollback
+
+        Args:
+            checkpoint_id: Target checkpoint to rollback to
+            reason: Optional reason for rollback
+            reset_evaluations: Whether to clear evaluations (default: True)
+
+        Returns:
+            Dict with rollback results
+
+        Raises:
+            ValueError: If checkpoint not found or invalid state
+        """
+        logger.info(
+            "Rolling back to checkpoint",
+            checkpoint_id=str(checkpoint_id),
+            reason=reason
+        )
+
+        try:
+            # Get checkpoint with task and all subtasks
+            result = await self.db.execute(
+                select(Checkpoint)
+                .options(
+                    selectinload(Checkpoint.task).selectinload(Task.subtasks)
+                )
+                .where(Checkpoint.checkpoint_id == checkpoint_id)
+            )
+            checkpoint = result.scalar_one_or_none()
+
+            if not checkpoint:
+                raise ValueError(f"Checkpoint {checkpoint_id} not found")
+
+            task = checkpoint.task
+            if not task:
+                raise ValueError(f"Task for checkpoint {checkpoint_id} not found")
+
+            # Check if task can be rolled back
+            if task.status in ["completed", "failed", "cancelled"]:
+                raise ValueError(
+                    f"Cannot rollback task in '{task.status}' status. "
+                    "Only active tasks can be rolled back."
+                )
+
+            # Get subtask IDs that were completed at this checkpoint
+            checkpoint_subtask_ids = set(checkpoint.subtasks_completed)
+
+            # Identify subtasks to reset (completed AFTER this checkpoint)
+            subtasks_to_reset = []
+            for subtask in task.subtasks:
+                subtask_id_str = str(subtask.subtask_id)
+                # If subtask is completed but NOT in checkpoint's completed list
+                if subtask.status == "completed" and subtask_id_str not in checkpoint_subtask_ids:
+                    subtasks_to_reset.append(subtask)
+
+            # Reset subtasks
+            subtasks_reset_count = 0
+            evaluations_cleared_count = 0
+
+            for subtask in subtasks_to_reset:
+                # Reset subtask status
+                subtask.status = "pending"
+                subtask.progress = 0
+                subtask.output = None
+                subtask.error = None
+                subtask.started_at = None
+                subtask.completed_at = None
+                subtask.assigned_worker = None
+                subtask.assigned_tool = None
+                subtasks_reset_count += 1
+
+                # Update Redis
+                await self.redis.set_subtask_status(subtask.subtask_id, "pending")
+
+                # Clear evaluations if requested
+                if reset_evaluations and subtask.evaluations:
+                    for evaluation in subtask.evaluations:
+                        await self.db.delete(evaluation)
+                        evaluations_cleared_count += 1
+
+                logger.debug(
+                    "Reset subtask",
+                    subtask_id=str(subtask.subtask_id),
+                    subtask_name=subtask.name
+                )
+
+            # Calculate new progress
+            total_subtasks = len(task.subtasks)
+            completed_subtasks = len(checkpoint_subtask_ids)
+            new_progress = int((completed_subtasks / total_subtasks) * 100) if total_subtasks > 0 else 0
+
+            # Update task
+            task.progress = new_progress
+            task.status = "in_progress"
+            task.completed_at = None
+
+            # Update Redis
+            await self.redis.set_task_status(task.task_id, "in_progress")
+            await self.redis.set_task_progress(task.task_id, new_progress)
+
+            # Delete checkpoints created AFTER this one
+            later_checkpoints_result = await self.db.execute(
+                select(Checkpoint)
+                .where(Checkpoint.task_id == task.task_id)
+                .where(Checkpoint.triggered_at > checkpoint.triggered_at)
+            )
+            later_checkpoints = later_checkpoints_result.scalars().all()
+            for later_cp in later_checkpoints:
+                await self.db.delete(later_cp)
+
+            # Add rollback note to checkpoint
+            rollback_note = f"Rollback performed at {datetime.utcnow().isoformat()}"
+            if reason:
+                rollback_note += f". Reason: {reason}"
+
+            if checkpoint.decision_notes:
+                checkpoint.decision_notes += f"\n\n[ROLLBACK] {rollback_note}"
+            else:
+                checkpoint.decision_notes = f"[ROLLBACK] {rollback_note}"
+
+            await self.db.commit()
+
+            # Notify via WebSocket
+            await self._notify_rollback(
+                checkpoint_id=checkpoint_id,
+                task_id=task.task_id,
+                subtasks_reset=subtasks_reset_count,
+                reason=reason
+            )
+
+            logger.info(
+                "Rollback completed",
+                checkpoint_id=str(checkpoint_id),
+                task_id=str(task.task_id),
+                subtasks_reset=subtasks_reset_count,
+                evaluations_cleared=evaluations_cleared_count
+            )
+
+            return {
+                "checkpoint_id": checkpoint_id,
+                "task_id": task.task_id,
+                "message": "Successfully rolled back to checkpoint",
+                "subtasks_reset": subtasks_reset_count,
+                "evaluations_cleared": evaluations_cleared_count,
+                "task_status": task.status,
+                "task_progress": new_progress
+            }
+
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(
+                "Rollback failed",
+                checkpoint_id=str(checkpoint_id),
+                error=str(e)
+            )
+            raise
+
+    async def _notify_rollback(
+        self,
+        checkpoint_id: UUID,
+        task_id: UUID,
+        subtasks_reset: int,
+        reason: Optional[str]
+    ) -> None:
+        """Send WebSocket notification for rollback event
+
+        Args:
+            checkpoint_id: Checkpoint UUID
+            task_id: Task UUID
+            subtasks_reset: Number of subtasks reset
+            reason: Rollback reason
+        """
+        try:
+            event = {
+                "type": "checkpoint_rollback",
+                "checkpoint_id": str(checkpoint_id),
+                "task_id": str(task_id),
+                "subtasks_reset": subtasks_reset,
+                "reason": reason,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            await self.redis.publish_event("events:checkpoint", event)
+
+            logger.debug(
+                "Rollback notification sent",
+                checkpoint_id=str(checkpoint_id),
+                task_id=str(task_id)
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to send rollback notification",
+                checkpoint_id=str(checkpoint_id),
+                error=str(e)
+            )
+
+    async def get_rollback_preview(
+        self,
+        checkpoint_id: UUID
+    ) -> Dict[str, Any]:
+        """
+        Preview what will be affected by rolling back to a checkpoint.
+
+        Args:
+            checkpoint_id: Target checkpoint UUID
+
+        Returns:
+            Dict with preview information
+        """
+        result = await self.db.execute(
+            select(Checkpoint)
+            .options(
+                selectinload(Checkpoint.task).selectinload(Task.subtasks).selectinload(Subtask.evaluations)
+            )
+            .where(Checkpoint.checkpoint_id == checkpoint_id)
+        )
+        checkpoint = result.scalar_one_or_none()
+
+        if not checkpoint:
+            raise ValueError(f"Checkpoint {checkpoint_id} not found")
+
+        task = checkpoint.task
+        checkpoint_subtask_ids = set(checkpoint.subtasks_completed)
+
+        # Find subtasks that would be reset
+        subtasks_to_reset = []
+        total_evaluations = 0
+
+        for subtask in task.subtasks:
+            subtask_id_str = str(subtask.subtask_id)
+            if subtask.status == "completed" and subtask_id_str not in checkpoint_subtask_ids:
+                subtasks_to_reset.append({
+                    "subtask_id": subtask.subtask_id,
+                    "name": subtask.name,
+                    "status": subtask.status,
+                    "has_output": subtask.output is not None,
+                    "evaluations_count": len(subtask.evaluations)
+                })
+                total_evaluations += len(subtask.evaluations)
+
+        # Count later checkpoints
+        later_checkpoints_result = await self.db.execute(
+            select(func.count(Checkpoint.checkpoint_id))
+            .where(Checkpoint.task_id == task.task_id)
+            .where(Checkpoint.triggered_at > checkpoint.triggered_at)
+        )
+        later_checkpoints_count = later_checkpoints_result.scalar()
+
+        # Calculate new progress
+        total_subtasks = len(task.subtasks)
+        completed_subtasks = len(checkpoint_subtask_ids)
+        new_progress = int((completed_subtasks / total_subtasks) * 100) if total_subtasks > 0 else 0
+
+        return {
+            "checkpoint_id": checkpoint_id,
+            "task_id": task.task_id,
+            "checkpoint_triggered_at": checkpoint.triggered_at,
+            "current_progress": task.progress,
+            "new_progress_after_rollback": new_progress,
+            "subtasks_to_reset": subtasks_to_reset,
+            "subtasks_reset_count": len(subtasks_to_reset),
+            "evaluations_to_clear": total_evaluations,
+            "checkpoints_to_delete": later_checkpoints_count,
+            "can_rollback": task.status not in ["completed", "failed", "cancelled"]
+        }

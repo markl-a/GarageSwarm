@@ -16,7 +16,9 @@ from src.logging_config import setup_logging, get_logger
 from src.redis_client import RedisClient
 from src.middleware.error_handler import register_exception_handlers
 from src.middleware.metrics import PrometheusMiddleware
+from src.middleware.request_id import RequestIDMiddleware
 from src.auth import set_redis_service
+from src.services.pool_monitor import PoolMonitor, set_pool_monitor
 
 # Import API routers
 from src.api.v1 import health
@@ -33,6 +35,9 @@ from src.api.v1 import mobile_ui
 
 # Global Redis client
 redis_client: RedisClient = None
+
+# Global pool monitor
+pool_monitor: PoolMonitor = None
 
 # Setup logging
 setup_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
@@ -80,12 +85,34 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to initialize Redis", error=str(e))
         raise
 
+    # Initialize connection pool monitor
+    global pool_monitor
+    try:
+        from src.database import engine
+
+        pool_monitor = PoolMonitor(
+            db_engine=engine,
+            redis_client=redis_client.client,
+            check_interval=settings.POOL_MONITOR_INTERVAL if hasattr(settings, 'POOL_MONITOR_INTERVAL') else 30
+        )
+        set_pool_monitor(pool_monitor)
+
+        # Start background monitoring
+        await pool_monitor.start()
+        logger.info("✓ Connection pool monitor started")
+    except Exception as e:
+        logger.warning("Pool monitor initialization failed (non-critical)", error=str(e))
+
     logger.info("✓ All services initialized successfully")
 
     yield
 
     # Shutdown
     logger.info("Shutting down Multi-Agent on the Web API")
+
+    # Stop pool monitor
+    if pool_monitor:
+        await pool_monitor.stop()
 
     # Close Redis connection
     if redis_client:
@@ -110,6 +137,9 @@ app = FastAPI(
 
 # Prometheus Metrics Middleware (register first to capture all requests)
 app.add_middleware(PrometheusMiddleware)
+
+# Request ID Middleware (for distributed tracing and log correlation)
+app.add_middleware(RequestIDMiddleware)
 
 # CORS Middleware - Security hardened configuration
 # IMPORTANT: Do NOT use "*" for allow_methods or allow_headers

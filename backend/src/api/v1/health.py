@@ -14,6 +14,7 @@ from src.config import get_settings, Settings
 from src.logging_config import get_logger
 from src.auth.dependencies import require_auth
 from src.models.user import User
+from src.services.pool_monitor import get_pool_monitor
 
 logger = get_logger(__name__)
 
@@ -196,3 +197,85 @@ async def detailed_health(
         raise HTTPException(status_code=503, detail=health_data)
 
     return health_data
+
+
+@router.get("/health/pools")
+async def pool_health(
+    current_user: User = Depends(require_auth),
+):
+    """
+    Connection pool health check
+
+    Returns health status and utilization for:
+    - Database connection pool
+    - Redis connection pool
+
+    Includes:
+    - Current utilization percentage
+    - Available connections
+    - Health warnings/alerts
+    """
+    monitor = get_pool_monitor()
+
+    if not monitor:
+        return {
+            "status": "unavailable",
+            "message": "Pool monitor not initialized"
+        }
+
+    health_data = await monitor.check_health()
+    return health_data
+
+
+@router.get("/health/pools/metrics")
+async def pool_metrics(
+    pool_name: str = None,
+    limit: int = 10,
+    current_user: User = Depends(require_auth),
+):
+    """
+    Get detailed pool metrics and history
+
+    Args:
+        pool_name: Optional filter by pool (database, redis)
+        limit: Number of historical samples to return (default: 10)
+
+    Returns:
+        Current metrics and historical utilization data
+    """
+    monitor = get_pool_monitor()
+
+    if not monitor:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unavailable", "message": "Pool monitor not initialized"}
+        )
+
+    # Get current metrics
+    current_metrics = await monitor.get_all_metrics()
+
+    # Build response
+    response = {
+        "current": {},
+        "history": {}
+    }
+
+    for name, metrics in current_metrics.items():
+        if pool_name and name != pool_name:
+            continue
+
+        if metrics:
+            response["current"][name] = {
+                "pool_size": metrics.pool_size,
+                "checked_in": metrics.checked_in,
+                "checked_out": metrics.checked_out,
+                "overflow": metrics.overflow,
+                "utilization_percent": metrics.utilization_percent,
+                "available_connections": metrics.available_connections,
+                "is_healthy": metrics.is_healthy,
+                "warning": metrics.warning_message,
+                "timestamp": metrics.timestamp.isoformat()
+            }
+            response["history"][name] = monitor.get_history(name, limit=limit)
+
+    return response

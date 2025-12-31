@@ -2,11 +2,59 @@
 Custom Exception Classes
 
 This module defines custom exceptions for the BMAD application,
-providing clear, specific error types with standardized status codes
-and detailed error information.
+providing clear, specific error types with standardized status codes,
+error codes for client-side handling, and detailed error information.
 """
 
 from typing import Dict, Optional, Any
+from enum import Enum
+
+
+class ErrorCode(str, Enum):
+    """
+    Standardized error codes for client-side handling.
+
+    Format: CATEGORY_SPECIFIC_ERROR
+    Categories: AUTH, RESOURCE, VALIDATION, SERVICE, TASK, RATE, TIMEOUT
+    """
+    # Authentication errors (1xxx)
+    AUTH_UNAUTHORIZED = "AUTH_001"
+    AUTH_FORBIDDEN = "AUTH_002"
+    AUTH_TOKEN_EXPIRED = "AUTH_003"
+    AUTH_TOKEN_INVALID = "AUTH_004"
+
+    # Resource errors (2xxx)
+    RESOURCE_NOT_FOUND = "RESOURCE_001"
+    RESOURCE_CONFLICT = "RESOURCE_002"
+    RESOURCE_ALREADY_EXISTS = "RESOURCE_003"
+
+    # Validation errors (3xxx)
+    VALIDATION_FAILED = "VALIDATION_001"
+    VALIDATION_FIELD_REQUIRED = "VALIDATION_002"
+    VALIDATION_FIELD_INVALID = "VALIDATION_003"
+
+    # Service errors (4xxx)
+    SERVICE_UNAVAILABLE = "SERVICE_001"
+    SERVICE_REDIS_ERROR = "SERVICE_002"
+    SERVICE_DATABASE_ERROR = "SERVICE_003"
+    SERVICE_EXTERNAL_ERROR = "SERVICE_004"
+
+    # Task execution errors (5xxx)
+    TASK_EXECUTION_FAILED = "TASK_001"
+    TASK_WORKER_ERROR = "TASK_002"
+    TASK_TIMEOUT = "TASK_003"
+    TASK_CANCELLED = "TASK_004"
+    TASK_INVALID_STATE = "TASK_005"
+
+    # Rate limiting errors (6xxx)
+    RATE_LIMIT_EXCEEDED = "RATE_001"
+
+    # Timeout errors (7xxx)
+    TIMEOUT_EXCEEDED = "TIMEOUT_001"
+
+    # Internal errors (9xxx)
+    INTERNAL_ERROR = "INTERNAL_001"
+    UNKNOWN_ERROR = "INTERNAL_999"
 
 
 class AppException(Exception):
@@ -19,18 +67,39 @@ class AppException(Exception):
     Attributes:
         message: Human-readable error message
         status_code: HTTP status code (default: 500)
+        error_code: Standardized error code for client handling
         details: Additional error details as a dictionary
+        retryable: Whether the operation can be retried
+        retry_after: Suggested retry delay in seconds (if retryable)
     """
     def __init__(
         self,
         message: str,
         status_code: int = 500,
-        details: Optional[Dict[str, Any]] = None
+        error_code: ErrorCode = ErrorCode.INTERNAL_ERROR,
+        details: Optional[Dict[str, Any]] = None,
+        retryable: bool = False,
+        retry_after: Optional[int] = None
     ):
         self.message = message
         self.status_code = status_code
+        self.error_code = error_code
         self.details = details or {}
+        self.retryable = retryable
+        self.retry_after = retry_after
         super().__init__(self.message)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert exception to dictionary for JSON response"""
+        result = {
+            "error_code": self.error_code.value,
+            "message": self.message,
+            "details": self.details,
+            "retryable": self.retryable
+        }
+        if self.retry_after:
+            result["retry_after"] = self.retry_after
+        return result
 
 
 class NotFoundError(AppException):
@@ -47,6 +116,7 @@ class NotFoundError(AppException):
         super().__init__(
             f"{resource} with id {identifier} not found",
             status_code=404,
+            error_code=ErrorCode.RESOURCE_NOT_FOUND,
             details={"resource": resource, "identifier": identifier}
         )
 
@@ -65,7 +135,12 @@ class ValidationError(AppException):
         )
     """
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=400, details=details)
+        super().__init__(
+            message,
+            status_code=400,
+            error_code=ErrorCode.VALIDATION_FAILED,
+            details=details
+        )
 
 
 class ConflictError(AppException):
@@ -80,7 +155,12 @@ class ConflictError(AppException):
         raise ConflictError("Cannot cancel a completed task")
     """
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=409, details=details)
+        super().__init__(
+            message,
+            status_code=409,
+            error_code=ErrorCode.RESOURCE_CONFLICT,
+            details=details
+        )
 
 
 class ServiceUnavailableError(AppException):
@@ -88,16 +168,30 @@ class ServiceUnavailableError(AppException):
     External service unavailable error
 
     Raised when an external service (Redis, database, AI service) is unavailable.
-    Returns HTTP 503.
+    Returns HTTP 503. This is a retryable error.
 
     Example:
         raise ServiceUnavailableError("Redis", details={"host": "localhost:6379"})
     """
-    def __init__(self, service: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        service: str,
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: int = 5
+    ):
+        error_code = ErrorCode.SERVICE_UNAVAILABLE
+        if service.lower() == "redis":
+            error_code = ErrorCode.SERVICE_REDIS_ERROR
+        elif service.lower() in ["database", "postgresql", "db"]:
+            error_code = ErrorCode.SERVICE_DATABASE_ERROR
+
         super().__init__(
             f"Service {service} is unavailable",
             status_code=503,
-            details={**(details or {}), "service": service}
+            error_code=error_code,
+            details={**(details or {}), "service": service},
+            retryable=True,
+            retry_after=retry_after
         )
 
 
@@ -111,8 +205,18 @@ class UnauthorizedError(AppException):
     Example:
         raise UnauthorizedError("Invalid API key")
     """
-    def __init__(self, message: str = "Unauthorized access", details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=401, details=details)
+    def __init__(
+        self,
+        message: str = "Unauthorized access",
+        details: Optional[Dict[str, Any]] = None,
+        error_code: ErrorCode = ErrorCode.AUTH_UNAUTHORIZED
+    ):
+        super().__init__(
+            message,
+            status_code=401,
+            error_code=error_code,
+            details=details
+        )
 
 
 class ForbiddenError(AppException):
@@ -126,7 +230,12 @@ class ForbiddenError(AppException):
         raise ForbiddenError("Insufficient permissions to delete this task")
     """
     def __init__(self, message: str = "Access forbidden", details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=403, details=details)
+        super().__init__(
+            message,
+            status_code=403,
+            error_code=ErrorCode.AUTH_FORBIDDEN,
+            details=details
+        )
 
 
 class TaskExecutionError(AppException):
@@ -142,8 +251,20 @@ class TaskExecutionError(AppException):
             details={"subtask_id": "123", "error": "Worker timeout"}
         )
     """
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=500, details=details)
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+        error_code: ErrorCode = ErrorCode.TASK_EXECUTION_FAILED,
+        retryable: bool = False
+    ):
+        super().__init__(
+            message,
+            status_code=500,
+            error_code=error_code,
+            details=details,
+            retryable=retryable
+        )
 
 
 class DatabaseError(AppException):
@@ -151,13 +272,26 @@ class DatabaseError(AppException):
     Database operation error
 
     Raised when database operations fail (connection, query, transaction).
-    Returns HTTP 500.
+    Returns HTTP 500. This is typically a retryable error.
 
     Example:
         raise DatabaseError("Failed to save task", details={"operation": "INSERT"})
     """
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=500, details=details)
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+        retryable: bool = True,
+        retry_after: int = 3
+    ):
+        super().__init__(
+            message,
+            status_code=500,
+            error_code=ErrorCode.SERVICE_DATABASE_ERROR,
+            details=details,
+            retryable=retryable,
+            retry_after=retry_after
+        )
 
 
 class RateLimitError(AppException):
@@ -165,24 +299,84 @@ class RateLimitError(AppException):
     Rate limit exceeded error
 
     Raised when rate limits are exceeded.
-    Returns HTTP 429.
+    Returns HTTP 429. This is a retryable error.
 
     Example:
-        raise RateLimitError("Too many requests", details={"retry_after": 60})
+        raise RateLimitError("Too many requests", retry_after=60)
     """
-    def __init__(self, message: str = "Rate limit exceeded", details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=429, details=details)
+    def __init__(
+        self,
+        message: str = "Rate limit exceeded",
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: int = 60
+    ):
+        super().__init__(
+            message,
+            status_code=429,
+            error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            details=details,
+            retryable=True,
+            retry_after=retry_after
+        )
 
 
-class TimeoutError(AppException):
+class OperationTimeoutError(AppException):
     """
     Operation timeout error
 
     Raised when an operation exceeds its timeout limit.
-    Returns HTTP 504.
+    Returns HTTP 504. This is typically a retryable error.
 
     Example:
-        raise TimeoutError("Task execution timeout", details={"timeout": 300})
+        raise OperationTimeoutError("Task execution timeout", details={"timeout": 300})
     """
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, status_code=504, details=details)
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+        retryable: bool = True,
+        retry_after: int = 10
+    ):
+        super().__init__(
+            message,
+            status_code=504,
+            error_code=ErrorCode.TIMEOUT_EXCEEDED,
+            details=details,
+            retryable=retryable,
+            retry_after=retry_after
+        )
+
+
+class TaskInvalidStateError(AppException):
+    """
+    Task invalid state error
+
+    Raised when a task operation cannot be performed due to invalid state
+    (e.g., trying to rollback a completed task).
+    Returns HTTP 400.
+
+    Example:
+        raise TaskInvalidStateError("Cannot rollback completed task", current_state="completed")
+    """
+    def __init__(
+        self,
+        message: str,
+        current_state: Optional[str] = None,
+        allowed_states: Optional[list] = None
+    ):
+        details = {}
+        if current_state:
+            details["current_state"] = current_state
+        if allowed_states:
+            details["allowed_states"] = allowed_states
+
+        super().__init__(
+            message,
+            status_code=400,
+            error_code=ErrorCode.TASK_INVALID_STATE,
+            details=details
+        )
+
+
+# Alias for backward compatibility
+TimeoutError = OperationTimeoutError

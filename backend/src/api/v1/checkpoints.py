@@ -25,7 +25,9 @@ from src.schemas.checkpoint import (
     CheckpointStatus,
     UserDecision,
     SubtaskInfo,
-    EvaluationInfo
+    EvaluationInfo,
+    RollbackRequest,
+    RollbackResponse
 )
 
 router = APIRouter()
@@ -306,4 +308,123 @@ async def get_checkpoint_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get checkpoint history: {str(e)}"
+        )
+
+
+@router.get(
+    "/checkpoints/{checkpoint_id}/rollback/preview",
+    status_code=status.HTTP_200_OK,
+    summary="Preview Rollback",
+    description="Preview what will be affected by rolling back to a checkpoint"
+)
+async def preview_rollback(
+    checkpoint_id: UUID,
+    checkpoint_service: CheckpointService = Depends(get_checkpoint_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Preview what will be affected by rolling back to a checkpoint.
+
+    This is a read-only operation that shows:
+    - Subtasks that will be reset to pending
+    - Evaluations that will be cleared
+    - Later checkpoints that will be deleted
+    - New task progress after rollback
+
+    **Path parameters:**
+    - checkpoint_id: UUID of the target checkpoint
+
+    **Response:**
+    - checkpoint_id: Target checkpoint UUID
+    - task_id: Task UUID
+    - subtasks_to_reset: List of subtasks that will be reset
+    - evaluations_to_clear: Number of evaluations that will be cleared
+    - checkpoints_to_delete: Number of later checkpoints to delete
+    - can_rollback: Whether rollback is allowed
+    """
+    try:
+        preview = await checkpoint_service.get_rollback_preview(checkpoint_id)
+        return preview
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Rollback preview failed", checkpoint_id=str(checkpoint_id), error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to preview rollback: {str(e)}"
+        )
+
+
+@router.post(
+    "/checkpoints/{checkpoint_id}/rollback",
+    response_model=RollbackResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Rollback to Checkpoint",
+    description="Rollback task state to a specific checkpoint"
+)
+async def rollback_to_checkpoint(
+    checkpoint_id: UUID,
+    request: RollbackRequest,
+    checkpoint_service: CheckpointService = Depends(get_checkpoint_service),
+    current_user: User = Depends(require_auth)
+):
+    """
+    Rollback task state to a specific checkpoint.
+
+    This operation:
+    1. Resets all subtasks completed AFTER the checkpoint to 'pending'
+    2. Clears output and error fields for those subtasks
+    3. Optionally clears evaluations for rolled-back subtasks
+    4. Deletes all checkpoints created after the target checkpoint
+    5. Updates task progress accordingly
+    6. Creates audit trail for the rollback
+
+    **WARNING**: This is a destructive operation. Use preview endpoint first.
+
+    **Path parameters:**
+    - checkpoint_id: UUID of the target checkpoint to rollback to
+
+    **Request body:**
+    - reason: Optional reason for rollback (for audit trail)
+    - reset_evaluations: Whether to also clear evaluations (default: True)
+
+    **Response:**
+    - checkpoint_id: Target checkpoint UUID
+    - task_id: Task UUID
+    - subtasks_reset: Number of subtasks reset
+    - evaluations_cleared: Number of evaluations cleared
+    - task_status: Updated task status
+    - task_progress: Updated task progress
+    """
+    try:
+        result = await checkpoint_service.rollback_to_checkpoint(
+            checkpoint_id=checkpoint_id,
+            reason=request.reason,
+            reset_evaluations=request.reset_evaluations
+        )
+
+        return RollbackResponse(
+            checkpoint_id=result["checkpoint_id"],
+            task_id=result["task_id"],
+            message=result["message"],
+            subtasks_reset=result["subtasks_reset"],
+            evaluations_cleared=result["evaluations_cleared"],
+            task_status=result["task_status"],
+            task_progress=result["task_progress"]
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Rollback failed", checkpoint_id=str(checkpoint_id), error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Rollback failed: {str(e)}"
         )

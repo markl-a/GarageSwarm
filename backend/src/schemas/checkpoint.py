@@ -251,3 +251,43 @@ class CheckpointHistoryResponse(BaseModel):
             }
         }
     )
+
+
+class RollbackRequest(BaseModel):
+    """Rollback to checkpoint request"""
+    reason: Optional[str] = Field(None, max_length=1000, description="Reason for rollback")
+    reset_evaluations: bool = Field(default=True, description="Also reset evaluations for rolled-back subtasks")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "reason": "Need to re-implement authentication module with different approach",
+                "reset_evaluations": True
+            }
+        }
+    )
+
+
+class RollbackResponse(BaseModel):
+    """Rollback response"""
+    checkpoint_id: UUID
+    task_id: UUID
+    message: str
+    subtasks_reset: int = Field(..., description="Number of subtasks reset to pending")
+    evaluations_cleared: int = Field(default=0, description="Number of evaluations cleared")
+    task_status: str = Field(..., description="Updated task status")
+    task_progress: int = Field(..., description="Updated task progress")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "checkpoint_id": "789e0123-e89b-12d3-a456-426614174002",
+                "task_id": "123e4567-e89b-12d3-a456-426614174000",
+                "message": "Successfully rolled back to checkpoint",
+                "subtasks_reset": 3,
+                "evaluations_cleared": 3,
+                "task_status": "in_progress",
+                "task_progress": 25
+            }
+        }
+    )
