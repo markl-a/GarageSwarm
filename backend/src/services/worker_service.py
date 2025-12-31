@@ -101,6 +101,9 @@ class WorkerService:
                 status=WorkerStatus.ONLINE.value
             )
 
+            # Publish event for event-driven scheduling
+            await self.redis.publish_worker_available(worker.worker_id)
+
             logger.info(
                 "Worker registered successfully",
                 worker_id=str(worker.worker_id),
@@ -183,6 +186,12 @@ class WorkerService:
                 worker_id=worker_id,
                 task_id=current_task
             )
+        else:
+            # Worker has no current task - clear it and publish availability event
+            await self.redis.clear_worker_current_task(worker_id)
+            # Publish event for event-driven scheduling (worker is now available)
+            if status in [WorkerStatus.ONLINE.value, WorkerStatus.IDLE.value, "idle", "online"]:
+                await self.redis.publish_worker_available(worker_id)
 
         # Invalidate worker list cache when status changes
         await self.redis.invalidate_cache_pattern("workers_list:*")

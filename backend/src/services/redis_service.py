@@ -152,6 +152,65 @@ class RedisService:
         """Clear worker's current task"""
         await self.redis.delete(f"workers:{worker_id}:current_task")
 
+    async def get_multiple_worker_current_tasks(
+        self, worker_ids: List[UUID]
+    ) -> Dict[str, Optional[str]]:
+        """
+        Get current tasks for multiple workers in batch using pipeline.
+
+        This is much more efficient than calling get_worker_current_task N times.
+        N workers = 1 Redis round-trip instead of N round-trips.
+
+        Args:
+            worker_ids: List of worker UUIDs
+
+        Returns:
+            Dict mapping worker_id (str) to current_task_id (str or None)
+        """
+        if not worker_ids:
+            return {}
+
+        pipeline = self.redis.pipeline()
+        for worker_id in worker_ids:
+            pipeline.get(f"workers:{worker_id}:current_task")
+
+        results = await pipeline.execute()
+
+        return {
+            str(worker_id): (
+                result.decode() if isinstance(result, bytes) else result
+            )
+            for worker_id, result in zip(worker_ids, results)
+        }
+
+    async def get_multiple_worker_statuses(
+        self, worker_ids: List[UUID]
+    ) -> Dict[str, Optional[str]]:
+        """
+        Get statuses for multiple workers in batch using pipeline.
+
+        Args:
+            worker_ids: List of worker UUIDs
+
+        Returns:
+            Dict mapping worker_id (str) to status (str or None)
+        """
+        if not worker_ids:
+            return {}
+
+        pipeline = self.redis.pipeline()
+        for worker_id in worker_ids:
+            pipeline.get(f"workers:{worker_id}:status")
+
+        results = await pipeline.execute()
+
+        return {
+            str(worker_id): (
+                result.decode() if isinstance(result, bytes) else result
+            )
+            for worker_id, result in zip(worker_ids, results)
+        }
+
     async def cache_worker_info(
         self, worker_id: UUID, info: Dict[str, Any], ttl: int = 120
     ) -> None:
@@ -1103,3 +1162,77 @@ class RedisService:
                 break
 
         return count
+
+    # ==================== Scheduler Events (Event-Driven Scheduling) ====================
+
+    SCHEDULER_CHANNEL = "scheduler:events"
+
+    async def publish_subtask_completed(self, subtask_id: UUID, task_id: UUID) -> int:
+        """
+        Publish subtask completion event for event-driven scheduling.
+
+        Instead of polling every N seconds, the scheduler listens for these
+        events and triggers allocation immediately when a subtask completes.
+
+        Args:
+            subtask_id: Completed subtask UUID
+            task_id: Parent task UUID
+
+        Returns:
+            Number of subscribers that received the event
+        """
+        event = {
+            "type": "subtask_completed",
+            "subtask_id": str(subtask_id),
+            "task_id": str(task_id),
+            "timestamp": datetime.now().isoformat()
+        }
+        return await self.publish_event(self.SCHEDULER_CHANNEL, event)
+
+    async def publish_worker_available(self, worker_id: UUID) -> int:
+        """
+        Publish worker availability event.
+
+        Triggers scheduler to check for pending subtasks when a worker
+        becomes available (finished task or came online).
+
+        Args:
+            worker_id: Available worker UUID
+
+        Returns:
+            Number of subscribers that received the event
+        """
+        event = {
+            "type": "worker_available",
+            "worker_id": str(worker_id),
+            "timestamp": datetime.now().isoformat()
+        }
+        return await self.publish_event(self.SCHEDULER_CHANNEL, event)
+
+    async def publish_task_created(self, task_id: UUID) -> int:
+        """
+        Publish task creation event.
+
+        Triggers scheduler to decompose and schedule the new task.
+
+        Args:
+            task_id: New task UUID
+
+        Returns:
+            Number of subscribers that received the event
+        """
+        event = {
+            "type": "task_created",
+            "task_id": str(task_id),
+            "timestamp": datetime.now().isoformat()
+        }
+        return await self.publish_event(self.SCHEDULER_CHANNEL, event)
+
+    async def subscribe_scheduler_events(self) -> "redis.client.PubSub":
+        """
+        Subscribe to scheduler events channel.
+
+        Returns:
+            PubSub object for receiving scheduler events
+        """
+        return await self.subscribe(self.SCHEDULER_CHANNEL)

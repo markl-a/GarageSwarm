@@ -247,20 +247,36 @@ class TaskAllocator:
         return allocations
 
     async def _get_available_workers(self) -> List[Worker]:
-        """Get all workers that are available for task assignment"""
+        """Get all workers that are available for task assignment
+
+        Uses batch Redis query (pipeline) to check all workers at once,
+        reducing N Redis round-trips to just 1.
+        """
         # Get workers with status 'online' or 'idle'
         result = await self.db.execute(
             select(Worker)
             .where(Worker.status.in_(["online", "idle"]))
         )
-        workers = result.scalars().all()
+        workers = list(result.scalars().all())
 
-        # Filter out workers with current tasks in Redis
-        available = []
-        for worker in workers:
-            current_task = await self.redis.get_worker_current_task(worker.worker_id)
-            if not current_task:
-                available.append(worker)
+        if not workers:
+            return []
+
+        # Batch query: Get current tasks for ALL workers in single Redis call
+        worker_ids = [w.worker_id for w in workers]
+        current_tasks = await self.redis.get_multiple_worker_current_tasks(worker_ids)
+
+        # Filter out workers with current tasks
+        available = [
+            worker for worker in workers
+            if not current_tasks.get(str(worker.worker_id))
+        ]
+
+        logger.debug(
+            "Available workers check",
+            total_online=len(workers),
+            available=len(available)
+        )
 
         return available
 

@@ -92,6 +92,9 @@ class TaskService:
             # Add task to queue
             await self.redis.add_task_to_queue(task.task_id)
 
+            # Publish event for event-driven scheduling
+            await self.redis.publish_task_created(task.task_id)
+
             logger.info(
                 "Task created successfully",
                 task_id=str(task.task_id)
@@ -107,27 +110,35 @@ class TaskService:
             )
             raise
 
-    async def get_task(self, task_id: UUID) -> Optional[Task]:
+    async def get_task(self, task_id: UUID, include_evaluations: bool = False) -> Optional[Task]:
         """Get task by ID
 
         Args:
             task_id: Task UUID
+            include_evaluations: Whether to eager load evaluations (avoids N+1)
 
         Returns:
             Optional[Task]: Task instance or None
         """
-        result = await self.db.execute(
-            select(Task)
-            .options(selectinload(Task.subtasks))
-            .where(Task.task_id == task_id)
-        )
+        query = select(Task).where(Task.task_id == task_id)
+
+        if include_evaluations:
+            # Eager load subtasks AND their evaluations to avoid N+1
+            query = query.options(
+                selectinload(Task.subtasks).selectinload(Subtask.evaluations)
+            )
+        else:
+            query = query.options(selectinload(Task.subtasks))
+
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def list_tasks(
         self,
         status: Optional[str] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
+        include_evaluations: bool = False
     ) -> tuple[List[Task], int]:
         """List tasks with optional filtering
 
@@ -135,14 +146,20 @@ class TaskService:
             status: Filter by status (optional)
             limit: Maximum number of results
             offset: Offset for pagination
+            include_evaluations: Whether to eager load evaluations (avoids N+1)
 
         Returns:
             tuple: (list of tasks, total count)
         """
         # Build query with eager loading to avoid N+1
-        query = select(Task).options(
-            selectinload(Task.subtasks)  # Eager load subtasks to avoid N+1
-        )
+        if include_evaluations:
+            query = select(Task).options(
+                selectinload(Task.subtasks).selectinload(Subtask.evaluations)
+            )
+        else:
+            query = select(Task).options(
+                selectinload(Task.subtasks)
+            )
 
         if status:
             query = query.where(Task.status == status)
@@ -441,6 +458,15 @@ class TaskService:
 
         # Update parent task progress
         await self._update_task_progress_from_subtasks(subtask.task_id)
+
+        # Publish event for event-driven scheduling (replaces polling)
+        if status == "completed":
+            await self.redis.publish_subtask_completed(subtask_id, subtask.task_id)
+            logger.debug(
+                "Published subtask completion event",
+                subtask_id=str(subtask_id),
+                task_id=str(subtask.task_id)
+            )
 
         return True
 
