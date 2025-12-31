@@ -45,6 +45,8 @@ class AlertThresholds:
     utilization_warning: float = 70.0  # Warn at 70% utilization
     utilization_critical: float = 90.0  # Critical at 90% utilization
     connection_timeout_seconds: float = 5.0  # Connection timeout threshold
+    backpressure_threshold: float = 85.0  # Start rejecting requests at 85% utilization
+    backpressure_cooldown_seconds: float = 5.0  # Time before re-checking after backpressure
 
 
 class PoolMonitor:
@@ -92,6 +94,11 @@ class PoolMonitor:
         # Monitor state
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
+
+        # Backpressure state
+        self._backpressure_active = False
+        self._last_backpressure_check: Optional[datetime] = None
+        self._backpressure_lock = asyncio.Lock()
 
     def register_alert_callback(
         self,
@@ -264,6 +271,83 @@ class PoolMonitor:
                 for name, m in metrics.items()
             },
             "issues": issues
+        }
+
+    async def is_under_backpressure(self, pool_name: str = "database") -> bool:
+        """
+        Check if the specified pool is under backpressure.
+
+        This is used to implement request shedding when pools are saturated.
+
+        Args:
+            pool_name: Name of the pool to check (database or redis)
+
+        Returns:
+            True if requests should be rejected, False if they should proceed
+        """
+        async with self._backpressure_lock:
+            now = datetime.utcnow()
+
+            # Use cached result if within cooldown period
+            if self._last_backpressure_check:
+                elapsed = (now - self._last_backpressure_check).total_seconds()
+                if elapsed < self.thresholds.backpressure_cooldown_seconds:
+                    return self._backpressure_active
+
+            # Perform fresh check
+            if pool_name == "database":
+                metrics = await self.get_database_metrics()
+            else:
+                metrics = await self.get_redis_metrics()
+
+            if not metrics:
+                self._backpressure_active = False
+            else:
+                self._backpressure_active = (
+                    metrics.utilization_percent >= self.thresholds.backpressure_threshold
+                )
+
+            self._last_backpressure_check = now
+
+            if self._backpressure_active:
+                logger.warning(
+                    "Backpressure activated",
+                    pool=pool_name,
+                    utilization=metrics.utilization_percent if metrics else None,
+                    threshold=self.thresholds.backpressure_threshold
+                )
+
+            return self._backpressure_active
+
+    async def should_allow_request(self, pool_name: str = "database") -> tuple[bool, Optional[str]]:
+        """
+        Check if a request should be allowed based on pool capacity.
+
+        Args:
+            pool_name: Name of the pool to check
+
+        Returns:
+            Tuple of (should_allow, reason_if_rejected)
+        """
+        if await self.is_under_backpressure(pool_name):
+            return (
+                False,
+                f"Service temporarily unavailable: {pool_name} pool at capacity. Please retry later."
+            )
+        return (True, None)
+
+    def get_backpressure_status(self) -> Dict[str, Any]:
+        """
+        Get current backpressure status.
+
+        Returns:
+            Dict with backpressure state information
+        """
+        return {
+            "active": self._backpressure_active,
+            "last_check": self._last_backpressure_check.isoformat() if self._last_backpressure_check else None,
+            "threshold": self.thresholds.backpressure_threshold,
+            "cooldown_seconds": self.thresholds.backpressure_cooldown_seconds
         }
 
     async def _trigger_alert(self, level: str, metrics: PoolMetrics) -> None:

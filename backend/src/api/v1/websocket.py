@@ -9,6 +9,7 @@ Includes JWT token authentication for secure connections.
 import asyncio
 import json
 from datetime import datetime
+from functools import lru_cache
 from typing import Dict, Set, Optional
 from uuid import UUID
 
@@ -33,6 +34,17 @@ from src.services.redis_service import RedisService
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+@lru_cache(maxsize=1)
+def get_connection_manager() -> 'ConnectionManager':
+    """
+    Dependency injection for ConnectionManager (singleton pattern).
+
+    Uses lru_cache to ensure only one instance is created and reused.
+    This is thread-safe and avoids global mutable state.
+    """
+    return ConnectionManager()
 
 
 class RedisPubSubManager:
@@ -232,7 +244,7 @@ class ConnectionManager:
 
     async def disconnect(self, client_id: str):
         """
-        Remove a WebSocket connection
+        Remove a WebSocket connection and cleanup all subscriptions
 
         Args:
             client_id: Client identifier to disconnect
@@ -241,13 +253,28 @@ class ConnectionManager:
         if client_id in self.active_connections:
             del self.active_connections[client_id]
 
-        # Clean up subscriptions
+        # Clean up subscriptions (including Redis Pub/Sub)
         if client_id in self.client_subscriptions:
-            for task_id in self.client_subscriptions[client_id]:
+            task_ids_to_cleanup = list(self.client_subscriptions[client_id])
+
+            for task_id in task_ids_to_cleanup:
                 if task_id in self.task_subscriptions:
                     self.task_subscriptions[task_id].discard(client_id)
+
+                    # If no more local subscribers, cleanup Redis Pub/Sub
                     if not self.task_subscriptions[task_id]:
                         del self.task_subscriptions[task_id]
+                        # Unsubscribe from Redis channel to prevent memory leak
+                        if self.pubsub_manager:
+                            try:
+                                await self.pubsub_manager.unsubscribe_from_task(task_id)
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to unsubscribe from Redis channel during disconnect",
+                                    task_id=str(task_id),
+                                    error=str(e)
+                                )
+
             del self.client_subscriptions[client_id]
 
         logger.info("WebSocket client disconnected", client_id=client_id, total_connections=len(self.active_connections))
@@ -402,8 +429,9 @@ class ConnectionManager:
         logger.debug("Broadcasted message to all clients", total=len(self.active_connections))
 
 
-# Global connection manager
-connection_manager = ConnectionManager()
+# Connection manager singleton (use get_connection_manager() for dependency injection)
+# Note: The global reference is kept for backward compatibility with existing code
+connection_manager = get_connection_manager()
 
 
 # ==================== WebSocket Endpoint ====================
@@ -597,9 +625,10 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected gracefully", client_id=client_id)
-        await connection_manager.disconnect(client_id)
     except Exception as e:
         logger.error("WebSocket error", client_id=client_id, error=str(e), exc_info=True)
+    finally:
+        # Always cleanup on disconnect - this prevents memory leaks
         await connection_manager.disconnect(client_id)
 
 
@@ -714,9 +743,8 @@ async def general_websocket_endpoint(
                     if msg_type == "task" and "task_id" in message:
                         task_id = UUID(message["task_id"])
                         task_subscriptions.add(task_id)
-                        # Subscribe to Redis channel
-                        if connection_manager.pubsub_manager:
-                            await connection_manager.pubsub_manager.subscribe_to_task(task_id)
+                        # Use connection_manager for proper tracking
+                        await connection_manager.subscribe_to_task(client_id, task_id)
                         logger.debug("Client subscribed to task", client_id=client_id, task_id=str(task_id))
 
                     elif msg_type == "worker" and "worker_id" in message:
@@ -734,9 +762,8 @@ async def general_websocket_endpoint(
                     if msg_type == "task" and "task_id" in message:
                         task_id = UUID(message["task_id"])
                         task_subscriptions.discard(task_id)
-                        # Unsubscribe from Redis channel
-                        if connection_manager.pubsub_manager:
-                            await connection_manager.pubsub_manager.unsubscribe_from_task(task_id)
+                        # Use connection_manager for proper cleanup
+                        await connection_manager.unsubscribe_from_task(client_id, task_id)
                         logger.debug("Client unsubscribed from task", client_id=client_id, task_id=str(task_id))
 
                     elif msg_type == "worker" and "worker_id" in message:
@@ -757,9 +784,10 @@ async def general_websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info("General WebSocket client disconnected", client_id=client_id)
-        await connection_manager.disconnect(client_id)
     except Exception as e:
         logger.error("General WebSocket error", client_id=client_id, error=str(e), exc_info=True)
+    finally:
+        # Always cleanup on disconnect - this prevents memory leaks
         await connection_manager.disconnect(client_id)
 
 

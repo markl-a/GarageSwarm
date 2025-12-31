@@ -7,6 +7,7 @@ Endpoints for code evaluation and quality assessment.
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
+from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
@@ -36,16 +37,16 @@ from src.evaluators.aggregator import EvaluationAggregator
 router = APIRouter()
 logger = structlog.get_logger()
 
-# Global aggregator instance (can be made configurable later)
-_aggregator = None
 
-
+@lru_cache(maxsize=1)
 def get_aggregator() -> EvaluationAggregator:
-    """Get or create evaluation aggregator instance"""
-    global _aggregator
-    if _aggregator is None:
-        _aggregator = EvaluationAggregator()
-    return _aggregator
+    """
+    Dependency injection for EvaluationAggregator (singleton pattern).
+
+    Uses lru_cache to ensure only one instance is created and reused.
+    This is thread-safe and avoids global mutable state.
+    """
+    return EvaluationAggregator()
 
 
 @router.post(

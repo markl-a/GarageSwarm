@@ -8,6 +8,11 @@ import logging
 from typing import Optional
 
 import redis.asyncio as redis
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+    RedisError
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +68,16 @@ class RedisClient:
 
             logger.info(f"✓ Redis connected successfully: {self.url}")
 
-        except redis.ConnectionError as e:
+        except RedisConnectionError as e:
             logger.error(f"✗ Failed to connect to Redis: {e}")
             raise
 
-        except Exception as e:
-            logger.error(f"✗ Unexpected error connecting to Redis: {e}")
+        except RedisTimeoutError as e:
+            logger.error(f"✗ Redis connection timeout: {e}")
+            raise
+
+        except RedisError as e:
+            logger.error(f"✗ Redis error during connection: {e}")
             raise
 
     async def close(self) -> None:
@@ -77,14 +86,18 @@ class RedisClient:
             try:
                 await self.client.close()
                 logger.info("Redis client closed")
-            except Exception as e:
+            except RedisConnectionError as e:
+                logger.warning(f"Connection already closed: {e}")
+            except RedisError as e:
                 logger.error(f"Error closing Redis client: {e}")
 
         if self.pool:
             try:
                 await self.pool.disconnect()
                 logger.info("Redis connection pool disconnected")
-            except Exception as e:
+            except RedisConnectionError as e:
+                logger.warning(f"Pool connection already closed: {e}")
+            except RedisError as e:
                 logger.error(f"Error disconnecting Redis pool: {e}")
 
     async def ping(self) -> bool:
@@ -100,7 +113,7 @@ class RedisClient:
         try:
             await self.client.ping()
             return True
-        except redis.ConnectionError:
+        except (RedisConnectionError, RedisTimeoutError):
             return False
 
     def is_connected(self) -> bool:

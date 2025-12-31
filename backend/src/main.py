@@ -17,6 +17,7 @@ from src.redis_client import RedisClient
 from src.middleware.error_handler import register_exception_handlers
 from src.middleware.metrics import PrometheusMiddleware
 from src.middleware.request_id import RequestIDMiddleware
+from src.middleware.backpressure import BackpressureMiddleware
 from src.auth import set_redis_service
 from src.services.pool_monitor import PoolMonitor, set_pool_monitor
 from src.services.worker_health_checker import (
@@ -266,6 +267,10 @@ app.add_middleware(PrometheusMiddleware)
 
 # Request ID Middleware (for distributed tracing and log correlation)
 app.add_middleware(RequestIDMiddleware)
+
+# Backpressure Middleware (reject requests when pools are saturated)
+# Excludes health checks and metrics endpoints
+app.add_middleware(BackpressureMiddleware)
 
 # CORS Middleware - Security hardened configuration
 # IMPORTANT: Do NOT use "*" for allow_methods or allow_headers
