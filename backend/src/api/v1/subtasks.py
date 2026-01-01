@@ -13,7 +13,9 @@ import structlog
 from src.dependencies import get_db, get_redis_service
 from src.auth.dependencies import require_auth
 from src.models.user import User
+from src.models.subtask import Subtask
 from src.services.task_allocator import TaskAllocator
+from src.api.v1.workers import push_task_to_worker
 from src.services.task_scheduler import TaskScheduler
 from src.services.redis_service import RedisService
 from src.services.checkpoint_service import CheckpointService
@@ -390,6 +392,8 @@ async def upload_subtask_result(
 async def allocate_subtask(
     subtask_id: UUID,
     allocator: TaskAllocator = Depends(get_task_allocator),
+    redis_service: RedisService = Depends(get_redis_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_auth)
 ):
     """
@@ -413,6 +417,24 @@ async def allocate_subtask(
         worker = await allocator.allocate_subtask(subtask_id)
 
         if worker:
+            # Push task to worker via WebSocket
+            from sqlalchemy import select
+            result = await db.execute(select(Subtask).where(Subtask.subtask_id == subtask_id))
+            subtask = result.scalar_one_or_none()
+
+            if subtask:
+                subtask_data = {
+                    "subtask_id": str(subtask.subtask_id),
+                    "task_id": str(subtask.task_id),
+                    "name": subtask.name,
+                    "description": subtask.description,
+                    "assigned_tool": subtask.assigned_tool or subtask.recommended_tool,
+                    "complexity": subtask.complexity,
+                    "priority": subtask.priority
+                }
+                await push_task_to_worker(worker.worker_id, subtask_data, redis_service)
+                logger.info("Task pushed to worker via WebSocket", worker_id=str(worker.worker_id), subtask_id=str(subtask_id))
+
             return AllocationResponse(
                 subtask_id=subtask_id,
                 worker_id=worker.worker_id,
