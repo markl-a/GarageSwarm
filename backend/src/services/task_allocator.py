@@ -20,18 +20,18 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
-# Scoring weights for worker selection
+# Scoring weights for worker selection (from config)
 SCORING_WEIGHTS = {
-    "tool_matching": 0.50,    # 50% - Does the worker have the recommended tool?
-    "resource_score": 0.30,   # 30% - How much resources are available?
-    "privacy_score": 0.20,    # 20% - Privacy level compatibility
+    "tool_matching": settings.ALLOCATOR_WEIGHT_TOOL_MATCH,
+    "resource_score": settings.ALLOCATOR_WEIGHT_RESOURCES,
+    "privacy_score": settings.ALLOCATOR_WEIGHT_PRIVACY,
 }
 
-# Resource thresholds
+# Resource thresholds (from config)
 RESOURCE_THRESHOLDS = {
-    "cpu_high": 80,      # CPU % above this is considered high usage
-    "memory_high": 85,   # Memory % above this is considered high usage
-    "disk_high": 90,     # Disk % above this is considered high usage
+    "cpu_high": settings.RESOURCE_THRESHOLD_CPU_HIGH,
+    "memory_high": settings.RESOURCE_THRESHOLD_MEMORY_HIGH,
+    "disk_high": settings.RESOURCE_THRESHOLD_DISK_HIGH,
 }
 
 # Resource scoring weights (CPU, Memory, Disk)

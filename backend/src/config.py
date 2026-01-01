@@ -141,6 +141,16 @@ class Settings(BaseSettings):
     MAX_QUEUE_ALLOCATION_ATTEMPTS: int = 100  # Safety limit for queue reallocation loop
     ALLOCATION_BATCH_SIZE: int = 50  # Max subtasks to allocate per batch
 
+    # Task Allocator Weights (must sum to 1.0)
+    ALLOCATOR_WEIGHT_TOOL_MATCH: float = 0.50  # Weight for tool matching score
+    ALLOCATOR_WEIGHT_RESOURCES: float = 0.30   # Weight for resource availability
+    ALLOCATOR_WEIGHT_PRIVACY: float = 0.20     # Weight for privacy compatibility
+
+    # Resource Thresholds (percentage)
+    RESOURCE_THRESHOLD_CPU_HIGH: int = 80      # High CPU usage threshold
+    RESOURCE_THRESHOLD_MEMORY_HIGH: int = 85   # High memory usage threshold
+    RESOURCE_THRESHOLD_DISK_HIGH: int = 90     # High disk usage threshold
+
     # Database Query
     DB_QUERY_TIMEOUT_SECONDS: int = 30  # Timeout for database queries
 
@@ -161,6 +171,48 @@ class Settings(BaseSettings):
     CHECKPOINT_ENABLE_EVALUATION_TRIGGER: bool = True  # Auto-trigger on low scores
     CHECKPOINT_ENABLE_PERIODIC_TRIGGER: bool = True  # Auto-trigger periodically
     CHECKPOINT_ENABLE_TIMEOUT_TRIGGER: bool = True  # Auto-trigger on timeout
+
+    # Pool Monitor
+    POOL_MONITOR_INTERVAL: int = 30  # Check interval in seconds
+    POOL_UTILIZATION_WARNING: float = 70.0    # Warning at 70% utilization
+    POOL_UTILIZATION_CRITICAL: float = 90.0   # Critical at 90% utilization
+    POOL_BACKPRESSURE_THRESHOLD: float = 85.0 # Start rejecting at 85%
+    POOL_BACKPRESSURE_COOLDOWN: float = 5.0   # Cooldown seconds
+
+    # Worker Health Check
+    WORKER_HEALTH_CHECK_INTERVAL: int = 30    # Check interval in seconds
+
+    # Dynamic Timeout Multipliers (based on subtask complexity 1-5)
+    TIMEOUT_MULTIPLIER_COMPLEXITY_1: float = 1.0   # Simple tasks
+    TIMEOUT_MULTIPLIER_COMPLEXITY_2: float = 1.5   # Basic tasks
+    TIMEOUT_MULTIPLIER_COMPLEXITY_3: float = 2.0   # Medium complexity
+    TIMEOUT_MULTIPLIER_COMPLEXITY_4: float = 3.0   # High complexity
+    TIMEOUT_MULTIPLIER_COMPLEXITY_5: float = 4.0   # Very high complexity
+
+    # Evaluation Thresholds
+    EVAL_CODE_QUALITY_WEIGHT: float = 0.25    # Code quality weight
+    EVAL_COMPLETENESS_WEIGHT: float = 0.30    # Completeness weight
+    EVAL_SECURITY_WEIGHT: float = 0.25        # Security weight
+    EVAL_ARCHITECTURE_WEIGHT: float = 0.20    # Architecture weight
+    EVAL_GRADE_EXCELLENT: float = 9.0         # Excellent threshold
+    EVAL_GRADE_GOOD: float = 7.0              # Good threshold
+    EVAL_GRADE_ACCEPTABLE: float = 5.0        # Acceptable threshold
+    EVAL_GRADE_POOR: float = 3.0              # Poor threshold
+
+    # Code Quality Evaluator
+    CODE_QUALITY_MAX_LINE_LENGTH: int = 120       # Max line length
+    CODE_QUALITY_MAX_COMPLEXITY: int = 10         # Max cyclomatic complexity
+    CODE_QUALITY_MAX_BLANK_LINES: int = 2         # Max consecutive blank lines
+
+    # Architecture Evaluator
+    ARCH_GOD_CLASS_THRESHOLD: int = 20            # Max methods in a class
+    ARCH_LONG_METHOD_THRESHOLD: int = 50          # Max lines in a method
+    ARCH_MAX_PARAMETERS: int = 5                  # Max function parameters
+    ARCH_MAX_NESTING_DEPTH: int = 4               # Max nesting depth
+    ARCH_LARGE_FILE_THRESHOLD: int = 500          # Max lines in a file
+
+    # Security Evaluator
+    SECURITY_HUMAN_REVIEW_THRESHOLD: float = 4.0  # Trigger review below this score
 
     # Logging
     LOG_LEVEL: str = "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL

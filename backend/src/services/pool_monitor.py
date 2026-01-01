@@ -41,12 +41,12 @@ class PoolMetrics:
 
 @dataclass
 class AlertThresholds:
-    """Alert threshold configuration"""
-    utilization_warning: float = 70.0  # Warn at 70% utilization
-    utilization_critical: float = 90.0  # Critical at 90% utilization
+    """Alert threshold configuration (defaults from settings)"""
+    utilization_warning: float = field(default_factory=lambda: settings.POOL_UTILIZATION_WARNING)
+    utilization_critical: float = field(default_factory=lambda: settings.POOL_UTILIZATION_CRITICAL)
     connection_timeout_seconds: float = 5.0  # Connection timeout threshold
-    backpressure_threshold: float = 85.0  # Start rejecting requests at 85% utilization
-    backpressure_cooldown_seconds: float = 5.0  # Time before re-checking after backpressure
+    backpressure_threshold: float = field(default_factory=lambda: settings.POOL_BACKPRESSURE_THRESHOLD)
+    backpressure_cooldown_seconds: float = field(default_factory=lambda: settings.POOL_BACKPRESSURE_COOLDOWN)
 
 
 class PoolMonitor:

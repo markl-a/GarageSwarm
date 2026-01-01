@@ -26,6 +26,26 @@ from src.schemas.subtask import SubtaskStatus
 logger = structlog.get_logger()
 
 
+def get_timeout_multiplier(complexity: int) -> float:
+    """
+    Get timeout multiplier based on subtask complexity.
+
+    Args:
+        complexity: Complexity level 1-5
+
+    Returns:
+        Timeout multiplier from config
+    """
+    multipliers = {
+        1: settings.TIMEOUT_MULTIPLIER_COMPLEXITY_1,
+        2: settings.TIMEOUT_MULTIPLIER_COMPLEXITY_2,
+        3: settings.TIMEOUT_MULTIPLIER_COMPLEXITY_3,
+        4: settings.TIMEOUT_MULTIPLIER_COMPLEXITY_4,
+        5: settings.TIMEOUT_MULTIPLIER_COMPLEXITY_5,
+    }
+    return multipliers.get(complexity, 1.0)
+
+
 class WorkerHealthChecker:
     """
     Background service for monitoring worker health.
@@ -97,25 +117,60 @@ class WorkerHealthChecker:
 
     async def _check_worker_health(self) -> None:
         """
-        Perform a single health check cycle.
+        Perform a single health check cycle with dynamic timeout support.
 
-        1. Find workers with stale heartbeats
+        1. Find workers with stale heartbeats (considering task complexity)
         2. Mark them as offline
         3. Requeue their subtasks
+
+        Dynamic timeout: base_timeout * complexity_multiplier
+        Workers with complex tasks get longer timeouts before being marked offline.
         """
         async with self.session_factory() as db:
-            # Find workers that should be online but have stale heartbeats
-            cutoff_time = datetime.utcnow() - timedelta(seconds=self.heartbeat_timeout)
+            now = datetime.utcnow()
+            base_cutoff = now - timedelta(seconds=self.heartbeat_timeout)
 
+            # First, get all workers that might be stale (using base timeout)
             result = await db.execute(
                 select(Worker)
                 .where(Worker.status.in_(["online", "busy", "idle"]))
                 .where(or_(
-                    Worker.last_heartbeat < cutoff_time,
+                    Worker.last_heartbeat < base_cutoff,
                     Worker.last_heartbeat.is_(None)
                 ))
             )
-            stale_workers = result.scalars().all()
+            potential_stale_workers = result.scalars().all()
+
+            if not potential_stale_workers:
+                return
+
+            # For each potentially stale worker, check with dynamic timeout
+            stale_workers = []
+            for worker in potential_stale_workers:
+                # Get the highest complexity subtask assigned to this worker
+                subtask_result = await db.execute(
+                    select(Subtask.complexity)
+                    .where(Subtask.assigned_worker == worker.worker_id)
+                    .where(Subtask.status == SubtaskStatus.IN_PROGRESS.value)
+                )
+                complexities = [c for c in subtask_result.scalars().all() if c is not None]
+
+                # Calculate dynamic timeout
+                max_complexity = max(complexities) if complexities else 1
+                multiplier = get_timeout_multiplier(max_complexity)
+                dynamic_timeout = self.heartbeat_timeout * multiplier
+                dynamic_cutoff = now - timedelta(seconds=dynamic_timeout)
+
+                # Check if worker is truly stale with dynamic timeout
+                if worker.last_heartbeat is None or worker.last_heartbeat < dynamic_cutoff:
+                    stale_workers.append(worker)
+                    logger.debug(
+                        "Worker stale with dynamic timeout",
+                        worker_id=str(worker.worker_id),
+                        complexity=max_complexity,
+                        multiplier=multiplier,
+                        dynamic_timeout_seconds=dynamic_timeout
+                    )
 
             if not stale_workers:
                 return

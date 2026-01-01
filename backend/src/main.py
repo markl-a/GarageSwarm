@@ -19,11 +19,13 @@ from src.middleware.metrics import PrometheusMiddleware
 from src.middleware.request_id import RequestIDMiddleware
 from src.middleware.backpressure import BackpressureMiddleware
 from src.auth import set_redis_service
-from src.services.pool_monitor import PoolMonitor, set_pool_monitor
-from src.services.worker_health_checker import (
-    WorkerHealthChecker,
-    set_worker_health_checker,
-    get_worker_health_checker
+from src.services.pool_monitor import set_pool_monitor
+from src.services.worker_health_checker import set_worker_health_checker
+from src.container import (
+    AppContainer,
+    set_container,
+    get_container,
+    shutdown_container
 )
 
 # Import API routers
@@ -41,15 +43,6 @@ from src.api.v1 import templates
 from src.api.v1 import mobile_ui
 from src.api.v1 import diagnostics
 
-# Global Redis client
-redis_client: RedisClient = None
-
-# Global pool monitor
-pool_monitor: PoolMonitor = None
-
-# Global worker health checker
-worker_health_checker: WorkerHealthChecker = None
-
 # Setup logging
 setup_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
 logger = get_logger(__name__)
@@ -61,6 +54,7 @@ async def lifespan(app: FastAPI):
     Application lifespan manager
 
     Handles startup and shutdown events for database and Redis connections.
+    Uses dependency injection container for service management.
     """
     # Startup
     logger.info("🚀 Starting Multi-Agent on the Web API", version=settings.APP_VERSION)
@@ -76,9 +70,8 @@ async def lifespan(app: FastAPI):
         raise
 
     # Initialize Redis connection
-    global redis_client
+    redis_client = None
     try:
-        from src.redis_client import redis_client as rc
         from src.services.redis_service import RedisService
 
         redis_client = RedisClient(
@@ -86,9 +79,8 @@ async def lifespan(app: FastAPI):
         )
         await redis_client.connect()
 
-        # Set global reference
+        # Set global reference for backward compatibility
         import src.redis_client
-
         src.redis_client.redis_client = redis_client
 
         # Initialize Redis service for token blacklist
@@ -99,42 +91,32 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to initialize Redis", error=str(e))
         raise
 
-    # Initialize connection pool monitor
-    global pool_monitor
+    # Initialize dependency injection container
+    container = None
     try:
-        from src.database import engine
+        from src.database import engine, async_session_factory
 
-        pool_monitor = PoolMonitor(
+        container = AppContainer()
+        await container.initialize(
             db_engine=engine,
-            redis_client=redis_client.client,
-            check_interval=settings.POOL_MONITOR_INTERVAL if hasattr(settings, 'POOL_MONITOR_INTERVAL') else 30
-        )
-        set_pool_monitor(pool_monitor)
-
-        # Start background monitoring
-        await pool_monitor.start()
-        logger.info("✓ Connection pool monitor started")
-    except Exception as e:
-        logger.warning("Pool monitor initialization failed (non-critical)", error=str(e))
-
-    # Initialize worker health checker
-    global worker_health_checker
-    try:
-        from src.database import async_session_factory
-
-        worker_health_checker = WorkerHealthChecker(
             session_factory=async_session_factory,
+            redis_client=redis_client,
             redis_service=redis_service,
-            check_interval=settings.WORKER_HEALTH_CHECK_INTERVAL if hasattr(settings, 'WORKER_HEALTH_CHECK_INTERVAL') else 30,
-            heartbeat_timeout=settings.WORKER_HEARTBEAT_TIMEOUT if hasattr(settings, 'WORKER_HEARTBEAT_TIMEOUT') else 120
+            settings=settings
         )
-        set_worker_health_checker(worker_health_checker)
+        set_container(container)
 
-        # Start background health checking
-        await worker_health_checker.start()
-        logger.info("✓ Worker health checker started")
+        # Set legacy global references for backward compatibility
+        if container.pool_monitor:
+            set_pool_monitor(container.pool_monitor)
+            logger.info("✓ Connection pool monitor started")
+
+        if container.worker_health_checker:
+            set_worker_health_checker(container.worker_health_checker)
+            logger.info("✓ Worker health checker started")
+
     except Exception as e:
-        logger.warning("Worker health checker initialization failed (non-critical)", error=str(e))
+        logger.warning("Container initialization failed (non-critical)", error=str(e))
 
     logger.info("✓ All services initialized successfully")
 
@@ -143,13 +125,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Multi-Agent on the Web API")
 
-    # Stop worker health checker
-    if worker_health_checker:
-        await worker_health_checker.stop()
-
-    # Stop pool monitor
-    if pool_monitor:
-        await pool_monitor.stop()
+    # Shutdown container (stops all background services)
+    if container:
+        await container.shutdown()
 
     # Close Redis connection
     if redis_client:
@@ -275,10 +253,13 @@ app.add_middleware(BackpressureMiddleware)
 # CORS Middleware - Security hardened configuration
 # IMPORTANT: Do NOT use "*" for allow_methods or allow_headers
 # Use explicit lists for security compliance
+# In DEBUG mode, allow all origins for development convenience
+cors_origins = ["*"] if settings.DEBUG else settings.CORS_ORIGINS
+cors_credentials = not settings.DEBUG  # Cannot use credentials with wildcard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,  # From environment variable
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_credentials,
     # Explicit allowed methods (NOT "*" for security)
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # Explicit allowed headers (NOT "*" for security)
