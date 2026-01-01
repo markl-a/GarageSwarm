@@ -2,6 +2,7 @@
 Redis Service
 
 High-level Redis operations for Multi-Agent platform.
+Includes circuit breaker for fault tolerance.
 """
 
 import json
@@ -13,6 +14,13 @@ import asyncio
 
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError, TimeoutError, RedisError
+
+from src.services.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerError,
+    REDIS_CIRCUIT_CONFIG
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +37,38 @@ class RedisService:
     - Pub/Sub event broadcasting
     """
 
-    def __init__(self, redis_client: redis.Redis):
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        circuit_breaker: Optional[CircuitBreaker] = None
+    ):
         """
         Initialize Redis service
 
         Args:
             redis_client: Async Redis client instance
+            circuit_breaker: Optional circuit breaker for fault tolerance
         """
         self.redis = redis_client
         self._max_retries = 3
         self._retry_delay = 0.5  # 500ms base delay
+        self._circuit_breaker = circuit_breaker or CircuitBreaker(
+            "redis",
+            REDIS_CIRCUIT_CONFIG
+        )
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        """Get circuit breaker instance"""
+        return self._circuit_breaker
+
+    def get_circuit_stats(self) -> Dict[str, Any]:
+        """Get circuit breaker statistics"""
+        return self._circuit_breaker.get_stats()
 
     async def _execute_with_retry(self, operation, *args, **kwargs):
         """
-        Execute Redis operation with retry logic
+        Execute Redis operation with retry logic and circuit breaker.
 
         Args:
             operation: Redis operation to execute
@@ -53,11 +79,21 @@ class RedisService:
 
         Raises:
             RedisError: If all retries fail
+            CircuitBreakerError: If circuit breaker is open
         """
+        # Check circuit breaker first
+        if not await self._circuit_breaker.can_execute():
+            raise CircuitBreakerError(
+                self._circuit_breaker.name,
+                self._circuit_breaker._get_time_remaining()
+            )
+
         last_error = None
         for attempt in range(self._max_retries):
             try:
-                return await operation(*args, **kwargs)
+                result = await operation(*args, **kwargs)
+                await self._circuit_breaker.record_success()
+                return result
             except (ConnectionError, TimeoutError) as e:
                 last_error = e
                 if attempt < self._max_retries - 1:
@@ -71,8 +107,10 @@ class RedisService:
                     logger.error(
                         f"Redis operation failed after {self._max_retries} attempts: {e}"
                     )
+                    await self._circuit_breaker.record_failure(e)
             except RedisError as e:
                 logger.error(f"Redis error: {e}")
+                await self._circuit_breaker.record_failure(e)
                 raise
 
         raise last_error
@@ -853,6 +891,142 @@ class RedisService:
         queue_key = f"websocket:queue:{client_id}"
         await self.redis.delete(queue_key)
         logger.debug(f"Cleared message queue for client: {client_id}")
+
+    # ==================== Task Message History ====================
+    # Provides message persistence for WebSocket replay on reconnection
+
+    async def store_task_message(
+        self,
+        task_id: UUID,
+        message: Dict[str, Any],
+        max_history: int = 100,
+        ttl: int = 3600
+    ) -> int:
+        """
+        Store a task message with sequence number for replay.
+
+        Messages are stored in a sorted set with timestamp-based scores
+        for efficient range queries and automatic ordering.
+
+        Args:
+            task_id: Task UUID
+            message: Message dict to store
+            max_history: Maximum messages to retain (sliding window)
+            ttl: Time-to-live in seconds (default: 1 hour)
+
+        Returns:
+            Sequence number of the stored message
+        """
+        history_key = f"websocket:history:{task_id}"
+        seq_key = f"websocket:seq:{task_id}"
+
+        # Get next sequence number atomically
+        seq = await self.redis.incr(seq_key)
+
+        # Add sequence to message
+        message_with_seq = {
+            **message,
+            "_seq": seq,
+            "_stored_at": datetime.utcnow().isoformat()
+        }
+        message_json = json.dumps(message_with_seq)
+
+        # Store in sorted set with sequence as score
+        await self.redis.zadd(history_key, {message_json: seq})
+
+        # Trim to max_history (remove oldest messages)
+        count = await self.redis.zcard(history_key)
+        if count > max_history:
+            # Remove oldest entries beyond max_history
+            await self.redis.zremrangebyrank(history_key, 0, count - max_history - 1)
+
+        # Set/refresh TTL
+        await self.redis.expire(history_key, ttl)
+        await self.redis.expire(seq_key, ttl)
+
+        logger.debug(
+            "Stored task message",
+            task_id=str(task_id),
+            seq=seq,
+            history_size=min(count + 1, max_history)
+        )
+        return seq
+
+    async def get_task_message_history(
+        self,
+        task_id: UUID,
+        from_seq: int = 0,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get task message history from a specific sequence number.
+
+        Useful for:
+        - New clients: Get recent history (from_seq=0)
+        - Reconnecting clients: Get missed messages (from_seq=last_received+1)
+
+        Args:
+            task_id: Task UUID
+            from_seq: Starting sequence number (exclusive, 0 = from beginning)
+            limit: Maximum messages to return
+
+        Returns:
+            List of messages in sequence order
+        """
+        history_key = f"websocket:history:{task_id}"
+
+        # Get messages with score > from_seq, limited
+        messages_json = await self.redis.zrangebyscore(
+            history_key,
+            min=f"({from_seq}" if from_seq > 0 else "-inf",  # Exclusive min
+            max="+inf",
+            start=0,
+            num=limit
+        )
+
+        messages = []
+        for msg_json in messages_json:
+            try:
+                messages.append(json.loads(msg_json))
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse history message: {msg_json}")
+
+        logger.debug(
+            "Retrieved task message history",
+            task_id=str(task_id),
+            from_seq=from_seq,
+            count=len(messages)
+        )
+        return messages
+
+    async def get_task_last_sequence(self, task_id: UUID) -> int:
+        """
+        Get the last sequence number for a task.
+
+        Args:
+            task_id: Task UUID
+
+        Returns:
+            Last sequence number, or 0 if no messages
+        """
+        seq_key = f"websocket:seq:{task_id}"
+        seq = await self.redis.get(seq_key)
+        return int(seq) if seq else 0
+
+    async def clear_task_history(self, task_id: UUID) -> None:
+        """
+        Clear message history for a task.
+
+        Called when a task is completed or cancelled.
+
+        Args:
+            task_id: Task UUID
+        """
+        history_key = f"websocket:history:{task_id}"
+        seq_key = f"websocket:seq:{task_id}"
+
+        await self.redis.delete(history_key, seq_key)
+        logger.debug(f"Cleared message history for task: {task_id}")
 
     async def publish_task_update(
         self, task_id: UUID, status: str, progress: int

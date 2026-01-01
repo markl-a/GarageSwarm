@@ -20,6 +20,9 @@ from src.middleware.metrics import (
     update_task_metrics,
     update_subtask_metrics,
 )
+from src.services.circuit_breaker import get_circuit_registry
+from src.dependencies import get_redis_service
+from src.services.redis_service import RedisService
 
 
 logger = structlog.get_logger(__name__)
@@ -216,3 +219,119 @@ async def metrics_health() -> dict:
             "metrics_enabled": False,
             "error": str(e),
         }
+
+
+@router.get(
+    "/circuits",
+    summary="Circuit Breaker Status",
+    description="Get status of all circuit breakers for fault tolerance monitoring",
+    tags=["Metrics"],
+)
+async def get_circuit_breaker_status(
+    redis_service: RedisService = Depends(get_redis_service)
+) -> dict:
+    """
+    Get circuit breaker status for all services.
+
+    Returns the state and statistics for each circuit breaker including:
+    - Current state (closed, open, half_open)
+    - Failure and success counts
+    - Time until recovery (if open)
+    - Configuration details
+
+    Returns:
+        dict: Circuit breaker status for all services
+    """
+    try:
+        # Get global registry stats
+        registry = get_circuit_registry()
+        all_stats = registry.get_all_stats()
+
+        # Add Redis circuit breaker stats directly from service
+        redis_stats = redis_service.get_circuit_stats()
+        if "redis" not in all_stats:
+            all_stats["redis"] = redis_stats
+
+        # Determine overall health
+        all_closed = all(
+            stats.get("state") == "closed"
+            for stats in all_stats.values()
+        )
+
+        return {
+            "healthy": all_closed,
+            "circuits": all_stats,
+            "summary": {
+                "total": len(all_stats),
+                "closed": sum(1 for s in all_stats.values() if s.get("state") == "closed"),
+                "open": sum(1 for s in all_stats.values() if s.get("state") == "open"),
+                "half_open": sum(1 for s in all_stats.values() if s.get("state") == "half_open"),
+            }
+        }
+
+    except Exception as e:
+        logger.error("Failed to get circuit breaker status", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get circuit breaker status: {str(e)}",
+        )
+
+
+@router.post(
+    "/circuits/{circuit_name}/reset",
+    summary="Reset Circuit Breaker",
+    description="Reset a specific circuit breaker to closed state",
+    tags=["Metrics"],
+)
+async def reset_circuit_breaker(
+    circuit_name: str,
+    redis_service: RedisService = Depends(get_redis_service)
+) -> dict:
+    """
+    Reset a specific circuit breaker.
+
+    This forcibly closes the circuit, allowing requests to pass through again.
+    Use with caution - the underlying service may still be unhealthy.
+
+    Args:
+        circuit_name: Name of the circuit breaker to reset
+
+    Returns:
+        dict: Result of the reset operation
+    """
+    try:
+        # Handle Redis circuit breaker specially
+        if circuit_name == "redis":
+            await redis_service.circuit_breaker.reset()
+            return {
+                "success": True,
+                "circuit": circuit_name,
+                "message": "Circuit breaker reset successfully"
+            }
+
+        # Check global registry
+        registry = get_circuit_registry()
+        breaker = registry.get(circuit_name)
+
+        if not breaker:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Circuit breaker '{circuit_name}' not found"
+            )
+
+        await breaker.reset()
+
+        return {
+            "success": True,
+            "circuit": circuit_name,
+            "message": "Circuit breaker reset successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to reset circuit breaker", circuit=circuit_name, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset circuit breaker: {str(e)}",
+        )

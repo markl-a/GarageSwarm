@@ -281,13 +281,21 @@ class ConnectionManager:
 
         logger.info("WebSocket client disconnected", client_id=client_id, total_connections=len(self.active_connections))
 
-    async def subscribe_to_task(self, client_id: str, task_id: UUID) -> None:
+    async def subscribe_to_task(
+        self,
+        client_id: str,
+        task_id: UUID,
+        from_seq: int = 0,
+        send_history: bool = True
+    ) -> None:
         """
         Subscribe a client to task logs
 
         Args:
             client_id: Client identifier
             task_id: Task ID to subscribe to
+            from_seq: Sequence number to replay from (0 = no replay, > 0 = replay from that seq)
+            send_history: Whether to send message history on subscribe (default: True)
         """
         if client_id not in self.client_subscriptions:
             logger.warning("Cannot subscribe unknown client", client_id=client_id)
@@ -303,6 +311,48 @@ class ConnectionManager:
                 await self.pubsub_manager.subscribe_to_task(task_id)
 
         self.task_subscriptions[task_id].add(client_id)
+
+        # Send message history for replay on reconnection
+        if send_history and self.redis_service and client_id in self.active_connections:
+            try:
+                history = await self.redis_service.get_task_message_history(
+                    task_id,
+                    from_seq=from_seq,
+                    limit=50
+                )
+                if history:
+                    websocket = self.active_connections[client_id]
+                    # Send history replay indicator
+                    await websocket.send_json({
+                        "type": "history_start",
+                        "task_id": str(task_id),
+                        "count": len(history),
+                        "from_seq": from_seq,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    # Send each historical message
+                    for msg in history:
+                        await websocket.send_json({**msg, "_replay": True})
+                    # Send history complete indicator
+                    await websocket.send_json({
+                        "type": "history_end",
+                        "task_id": str(task_id),
+                        "last_seq": history[-1].get("_seq", 0) if history else 0,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    logger.debug(
+                        "Sent message history to client",
+                        client_id=client_id,
+                        task_id=str(task_id),
+                        count=len(history)
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to send message history",
+                    client_id=client_id,
+                    task_id=str(task_id),
+                    error=str(e)
+                )
 
         logger.info("Client subscribed to task", client_id=client_id, task_id=str(task_id))
 
@@ -381,19 +431,35 @@ class ConnectionManager:
         logger.debug("Broadcasted message to local task subscribers", task_id=str(task_id), recipients=success_count)
         return success_count
 
-    async def broadcast_to_task_subscribers(self, task_id: UUID, message: dict) -> int:
+    async def broadcast_to_task_subscribers(
+        self,
+        task_id: UUID,
+        message: dict,
+        persist: bool = True
+    ) -> int:
         """
         Broadcast message to all clients subscribed to a task (across all instances)
 
         Publishes message to Redis Pub/Sub for cross-instance delivery.
+        Optionally persists message for replay on reconnection.
 
         Args:
             task_id: Task ID
             message: Message dict to broadcast
+            persist: Whether to persist message for replay (default: True)
 
         Returns:
             Number of backend instances that received the message
         """
+        # Persist message for replay on reconnection
+        if persist and self.redis_service:
+            try:
+                seq = await self.redis_service.store_task_message(task_id, message)
+                # Add sequence number to message for client tracking
+                message = {**message, "_seq": seq}
+            except Exception as e:
+                logger.warning("Failed to persist message", task_id=str(task_id), error=str(e))
+
         # Publish to Redis for cross-instance broadcasting
         if self.redis_service:
             try:
@@ -574,7 +640,13 @@ async def websocket_endpoint(
                 if action == "subscribe" and new_task_id:
                     try:
                         task_uuid = UUID(new_task_id)
-                        await connection_manager.subscribe_to_task(client_id, task_uuid)
+                        from_seq = data.get("from_seq", 0)
+                        await connection_manager.subscribe_to_task(
+                            client_id,
+                            task_uuid,
+                            from_seq=from_seq,
+                            send_history=True
+                        )
                         await connection_manager.send_personal_message(
                             {
                                 "type": "subscribed",
@@ -624,6 +696,56 @@ async def websocket_endpoint(
                         },
                         client_id
                     )
+
+                elif action == "replay" and new_task_id:
+                    # Replay messages from a specific sequence number
+                    try:
+                        task_uuid = UUID(new_task_id)
+                        from_seq = data.get("from_seq", 0)
+                        limit = min(data.get("limit", 50), 100)  # Max 100 messages
+
+                        history = await redis_service.get_task_message_history(
+                            task_uuid,
+                            from_seq=from_seq,
+                            limit=limit
+                        )
+
+                        await connection_manager.send_personal_message(
+                            {
+                                "type": "history_start",
+                                "task_id": new_task_id,
+                                "count": len(history),
+                                "from_seq": from_seq,
+                                "timestamp": datetime.utcnow().isoformat()
+                            },
+                            client_id
+                        )
+
+                        for msg in history:
+                            await connection_manager.send_personal_message(
+                                {**msg, "_replay": True},
+                                client_id
+                            )
+
+                        await connection_manager.send_personal_message(
+                            {
+                                "type": "history_end",
+                                "task_id": new_task_id,
+                                "last_seq": history[-1].get("_seq", 0) if history else 0,
+                                "timestamp": datetime.utcnow().isoformat()
+                            },
+                            client_id
+                        )
+
+                    except ValueError:
+                        await connection_manager.send_personal_message(
+                            {
+                                "type": "error",
+                                "data": {"message": "Invalid task_id format"},
+                                "timestamp": datetime.utcnow().isoformat()
+                            },
+                            client_id
+                        )
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected gracefully", client_id=client_id)
@@ -770,9 +892,15 @@ async def general_websocket_endpoint(
 
                     if msg_type == "task" and "task_id" in message:
                         task_id = UUID(message["task_id"])
+                        from_seq = message.get("from_seq", 0)
                         task_subscriptions.add(task_id)
-                        # Use connection_manager for proper tracking
-                        await connection_manager.subscribe_to_task(client_id, task_id)
+                        # Use connection_manager for proper tracking with history replay
+                        await connection_manager.subscribe_to_task(
+                            client_id,
+                            task_id,
+                            from_seq=from_seq,
+                            send_history=True
+                        )
                         logger.debug("Client subscribed to task", client_id=client_id, task_id=str(task_id))
 
                     elif msg_type == "worker" and "worker_id" in message:
