@@ -2,17 +2,23 @@
 Workers API
 
 Worker Agent management endpoints for registration, heartbeat, and monitoring.
+Includes WebSocket endpoint for real-time task push.
 """
 
+import asyncio
+import json
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 import structlog
 
 from src.dependencies import get_db, get_redis_service
 from src.auth.dependencies import require_auth
 from src.models.user import User
+from src.models.worker import Worker
 from src.services.worker_service import WorkerService
 from src.services.redis_service import RedisService
 from src.schemas.worker import (
@@ -284,3 +290,205 @@ async def unregister_worker(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to unregister worker: {str(e)}"
         )
+
+
+# ==================== Worker WebSocket Endpoint ====================
+
+
+# Store active worker connections
+_worker_connections: dict[UUID, WebSocket] = {}
+
+
+def get_worker_connections() -> dict[UUID, WebSocket]:
+    """Get active worker WebSocket connections"""
+    return _worker_connections
+
+
+@router.websocket("/workers/{worker_id}/ws")
+async def worker_websocket_endpoint(
+    websocket: WebSocket,
+    worker_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    redis_service: RedisService = Depends(get_redis_service)
+):
+    """
+    WebSocket endpoint for worker agents to receive real-time task assignments.
+
+    Workers connect to this endpoint after registration to receive:
+    - Task assignments pushed from the scheduler
+    - Heartbeat acknowledgments
+    - System notifications
+
+    **Path parameters:**
+    - worker_id: UUID of the registered worker
+
+    **WebSocket Protocol:**
+
+    Server sends task assignments:
+    ```json
+    {
+        "type": "task_assignment",
+        "data": {
+            "subtask_id": "uuid",
+            "task_id": "uuid",
+            "description": "...",
+            "assigned_tool": "claude_code",
+            "input_data": {...}
+        },
+        "timestamp": "2025-12-08T10:30:00Z"
+    }
+    ```
+
+    Client can send:
+    ```json
+    {"type": "ping"}
+    {"type": "status", "data": {"status": "busy", "current_task": "uuid"}}
+    ```
+    """
+    # Verify worker exists
+    result = await db.execute(select(Worker).where(Worker.worker_id == worker_id))
+    worker = result.scalar_one_or_none()
+
+    if not worker:
+        await websocket.close(code=1008, reason=f"Worker {worker_id} not found")
+        logger.warning("Worker WebSocket rejected - worker not found", worker_id=str(worker_id))
+        return
+
+    # Accept connection
+    await websocket.accept()
+    _worker_connections[worker_id] = websocket
+
+    logger.info(
+        "Worker WebSocket connected",
+        worker_id=str(worker_id),
+        machine_name=worker.machine_name,
+        total_connections=len(_worker_connections)
+    )
+
+    # Send welcome message
+    await websocket.send_json({
+        "type": "connected",
+        "data": {
+            "worker_id": str(worker_id),
+            "machine_name": worker.machine_name
+        },
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+    # Subscribe to worker-specific Redis channel for task assignments
+    pubsub = redis_service.redis.pubsub()
+    channel = f"worker:{worker_id}:tasks"
+
+    try:
+        await pubsub.subscribe(channel)
+        logger.debug("Subscribed to worker channel", channel=channel)
+
+        # Start background task to listen for Redis messages
+        async def redis_listener():
+            try:
+                while True:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if message and message['type'] == 'message':
+                        try:
+                            data = json.loads(message['data'])
+                            await websocket.send_json(data)
+                        except (json.JSONDecodeError, Exception) as e:
+                            logger.error("Failed to forward Redis message", error=str(e))
+            except asyncio.CancelledError:
+                pass
+
+        listener_task = asyncio.create_task(redis_listener())
+
+        try:
+            while True:
+                # Receive messages from worker
+                data = await websocket.receive_json()
+
+                if isinstance(data, dict):
+                    msg_type = data.get("type")
+
+                    if msg_type == "ping":
+                        await websocket.send_json({
+                            "type": "pong",
+                            "timestamp": datetime.utcnow().isoformat()
+                        })
+
+                    elif msg_type == "status":
+                        # Update worker status in Redis
+                        status_data = data.get("data", {})
+                        await redis_service.set_worker_status(
+                            worker_id,
+                            status_data.get("status", "online")
+                        )
+                        logger.debug(
+                            "Worker status updated via WebSocket",
+                            worker_id=str(worker_id),
+                            status=status_data.get("status")
+                        )
+
+                    elif msg_type == "task_complete":
+                        # Worker finished a task
+                        task_data = data.get("data", {})
+                        logger.info(
+                            "Worker reported task completion",
+                            worker_id=str(worker_id),
+                            subtask_id=task_data.get("subtask_id")
+                        )
+
+        except WebSocketDisconnect:
+            logger.info("Worker WebSocket disconnected gracefully", worker_id=str(worker_id))
+        finally:
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
+
+    except Exception as e:
+        logger.error("Worker WebSocket error", worker_id=str(worker_id), error=str(e))
+    finally:
+        # Cleanup
+        await pubsub.unsubscribe(channel)
+        await pubsub.close()
+
+        if worker_id in _worker_connections:
+            del _worker_connections[worker_id]
+
+        logger.info(
+            "Worker WebSocket cleaned up",
+            worker_id=str(worker_id),
+            total_connections=len(_worker_connections)
+        )
+
+
+async def push_task_to_worker(
+    worker_id: UUID,
+    subtask_data: dict,
+    redis_service: RedisService
+) -> bool:
+    """
+    Push a task assignment to a worker via WebSocket.
+
+    Args:
+        worker_id: Target worker UUID
+        subtask_data: Subtask data to send
+        redis_service: Redis service for pub/sub
+
+    Returns:
+        True if message was published, False otherwise
+    """
+    message = {
+        "type": "task_assignment",
+        "data": subtask_data,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    channel = f"worker:{worker_id}:tasks"
+
+    try:
+        await redis_service.redis.publish(channel, json.dumps(message))
+        logger.debug("Task pushed to worker", worker_id=str(worker_id))
+        return True
+    except Exception as e:
+        logger.error("Failed to push task to worker", worker_id=str(worker_id), error=str(e))
+        return False
