@@ -20,9 +20,10 @@ class ConnectionManager:
         """Initialize connection manager
 
         Args:
-            config: Configuration dictionary with backend_url, etc.
+            config: Configuration dictionary with backend_url, api_key, etc.
         """
         self.backend_url = config["backend_url"]
+        self.api_key = config.get("api_key", "")
         self.client: Optional[httpx.AsyncClient] = None
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.ws_url = self.backend_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -32,12 +33,16 @@ class ConnectionManager:
         self.ws_client: Optional[WebSocketClient] = None
 
     async def connect(self):
-        """Initialize HTTP client"""
+        """Initialize HTTP client with API key authentication"""
         if self.client is None:
+            headers = {
+                "User-Agent": "MultiAgent-Worker/1.0",
+                "X-Worker-API-Key": self.api_key,
+            }
             self.client = httpx.AsyncClient(
                 base_url=self.backend_url,
                 timeout=30.0,
-                headers={"User-Agent": "MultiAgent-Worker/1.0"}
+                headers=headers
             )
             logger.info("HTTP client initialized", backend_url=self.backend_url)
 
@@ -205,7 +210,8 @@ class ConnectionManager:
                 worker_id=worker_id,
                 message_handler=message_handler,
                 on_connect=on_connect,
-                on_disconnect=on_disconnect
+                on_disconnect=on_disconnect,
+                api_key=self.api_key
             )
 
         # Connect (this will run indefinitely with auto-reconnect)

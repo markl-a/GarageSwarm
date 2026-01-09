@@ -24,6 +24,11 @@ from .dependencies import (
     require_auth,
     optional_auth,
 )
+from .worker_auth import (
+    require_worker_auth,
+    validate_worker_websocket,
+    get_worker_api_key_service,
+)
 
 __all__ = [
     # Token creation
@@ -47,4 +52,8 @@ __all__ = [
     "get_current_active_user",
     "require_auth",
     "optional_auth",
+    # Worker authentication
+    "require_worker_auth",
+    "validate_worker_websocket",
+    "get_worker_api_key_service",
 ]

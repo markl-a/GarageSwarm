@@ -67,23 +67,28 @@ services:
     networks:
       - multi_agent_network
 
-  # Worker agent is optional in development
-  # Uncomment to run worker agent in Docker
-  # worker-agent:
-  #   build:
-  #     context: ./worker-agent
-  #     dockerfile: Dockerfile.dev
-  #   container_name: multi_agent_worker
-  #   environment:
-  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  #     GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-  #   volumes:
-  #     - ./worker-agent:/app
-  #   depends_on:
-  #     - backend
-  #   command: python src/main.py --config config/agent.yaml
-  #   networks:
-  #     - multi_agent_network
+  # Worker agent - requires WORKER_API_KEY for authentication
+  # To enable: set WORKER_API_KEY environment variable before docker-compose up
+  worker-agent:
+    build:
+      context: ./worker-agent
+      dockerfile: Dockerfile.dev
+    container_name: multi_agent_worker
+    environment:
+      WORKER_API_KEY: ${WORKER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./worker-agent:/app
+    depends_on:
+      backend:
+        condition: service_started
+    restart: on-failure
+    networks:
+      - multi_agent_network
+    profiles:
+      - worker
 
 volumes:
   postgres_data:

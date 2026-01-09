@@ -17,9 +17,11 @@ import structlog
 
 from src.dependencies import get_db, get_redis_service
 from src.auth.dependencies import require_auth
+from src.auth.worker_auth import require_worker_auth, validate_worker_websocket
 from src.models.user import User
 from src.models.worker import Worker
 from src.services.worker_service import WorkerService
+from src.services.worker_api_key_service import WorkerAPIKeyService
 from src.services.redis_service import RedisService
 from src.schemas.worker import (
     WorkerRegisterRequest,
@@ -30,6 +32,13 @@ from src.schemas.worker import (
     WorkerDetailResponse,
     WorkerSummary,
     WorkerStatus
+)
+from src.schemas.worker_api_key import (
+    APIKeyCreateRequest,
+    APIKeyCreateResponse,
+    APIKeyListResponse,
+    APIKeySummary,
+    APIKeyRevokeResponse,
 )
 
 router = APIRouter()
@@ -44,12 +53,19 @@ async def get_worker_service(
     return WorkerService(db, redis_service)
 
 
+async def get_api_key_service(
+    db: AsyncSession = Depends(get_db),
+) -> WorkerAPIKeyService:
+    """Dependency to get WorkerAPIKeyService instance"""
+    return WorkerAPIKeyService(db)
+
+
 @router.post(
     "/workers/register",
     response_model=WorkerRegisterResponse,
     status_code=status.HTTP_200_OK,
     summary="Register Worker Agent",
-    description="Register a new worker agent or update an existing one (idempotent operation)"
+    description="Register a new worker agent or update an existing one (no auth required for bootstrap)"
 )
 async def register_worker(
     request: WorkerRegisterRequest,
@@ -106,11 +122,12 @@ async def register_worker(
     response_model=WorkerHeartbeatResponse,
     status_code=status.HTTP_200_OK,
     summary="Send Worker Heartbeat",
-    description="Update worker status and resource usage via heartbeat"
+    description="Update worker status and resource usage via heartbeat (requires API key)"
 )
 async def worker_heartbeat(
     worker_id: UUID,
     request: WorkerHeartbeatRequest,
+    authenticated_worker_id: UUID = Depends(require_worker_auth),
     worker_service: WorkerService = Depends(get_worker_service)
 ):
     """
@@ -124,6 +141,13 @@ async def worker_heartbeat(
     - resources: Current resource usage (cpu_percent, memory_percent, disk_percent)
     - current_task: Currently executing task ID (optional)
     """
+    # Verify the authenticated worker matches the path parameter
+    if authenticated_worker_id != worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API key does not match worker ID"
+        )
+
     try:
         await worker_service.update_heartbeat(
             worker_id=worker_id,
@@ -253,10 +277,11 @@ async def get_worker(
     "/workers/{worker_id}/unregister",
     status_code=status.HTTP_200_OK,
     summary="Unregister Worker",
-    description="Mark worker as offline (graceful shutdown)"
+    description="Mark worker as offline (graceful shutdown, requires API key)"
 )
 async def unregister_worker(
     worker_id: UUID,
+    authenticated_worker_id: UUID = Depends(require_worker_auth),
     worker_service: WorkerService = Depends(get_worker_service)
 ):
     """
@@ -271,6 +296,13 @@ async def unregister_worker(
     - Returns 200 if successful
     - Returns 404 if worker not found
     """
+    # Verify the authenticated worker matches the path parameter
+    if authenticated_worker_id != worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API key does not match worker ID"
+        )
+
     try:
         success = await worker_service.unregister_worker(worker_id)
 
@@ -290,6 +322,122 @@ async def unregister_worker(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to unregister worker: {str(e)}"
         )
+
+
+# ==================== API Key Management Endpoints ====================
+
+
+@router.post(
+    "/workers/api-keys",
+    response_model=APIKeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate Worker API Key",
+    description="Generate a new API key for a worker. The plain key is returned ONCE."
+)
+async def create_worker_api_key(
+    request: APIKeyCreateRequest,
+    current_user: User = Depends(require_auth),
+    api_key_service: WorkerAPIKeyService = Depends(get_api_key_service)
+):
+    """
+    Generate a new API key for a worker.
+
+    **IMPORTANT**: The plain API key is returned only once. Save it securely!
+
+    Requires user authentication (JWT).
+
+    **Request body:**
+    - worker_id: UUID of the worker to create key for
+    - description: Optional description for the key
+    - expires_in_days: Optional expiration (1-365 days, null = never expires)
+    """
+    try:
+        api_key, plain_key = await api_key_service.create_api_key(
+            worker_id=request.worker_id,
+            created_by=current_user.user_id,
+            description=request.description,
+            expires_in_days=request.expires_in_days
+        )
+
+        return APIKeyCreateResponse(
+            key_id=api_key.key_id,
+            worker_id=api_key.worker_id,
+            api_key=plain_key,
+            key_prefix=api_key.key_prefix,
+            description=api_key.description,
+            expires_at=api_key.expires_at,
+            created_at=api_key.created_at
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Failed to create API key", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create API key"
+        )
+
+
+@router.get(
+    "/workers/{worker_id}/api-keys",
+    response_model=APIKeyListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List Worker API Keys",
+    description="List all API keys for a worker (without the actual key values)"
+)
+async def list_worker_api_keys(
+    worker_id: UUID,
+    current_user: User = Depends(require_auth),
+    api_key_service: WorkerAPIKeyService = Depends(get_api_key_service)
+):
+    """
+    List all API keys for a specific worker.
+
+    Only returns metadata (not the actual keys).
+    Requires user authentication (JWT).
+    """
+    keys = await api_key_service.list_api_keys(worker_id)
+
+    return APIKeyListResponse(
+        keys=[APIKeySummary.model_validate(k) for k in keys],
+        total=len(keys)
+    )
+
+
+@router.delete(
+    "/workers/api-keys/{key_id}",
+    response_model=APIKeyRevokeResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Revoke Worker API Key",
+    description="Revoke an API key, making it invalid for authentication"
+)
+async def revoke_worker_api_key(
+    key_id: UUID,
+    current_user: User = Depends(require_auth),
+    api_key_service: WorkerAPIKeyService = Depends(get_api_key_service)
+):
+    """
+    Revoke a worker API key.
+
+    The key will immediately become invalid.
+    Requires user authentication (JWT).
+    """
+    api_key = await api_key_service.revoke_api_key(key_id)
+
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"API key {key_id} not found"
+        )
+
+    return APIKeyRevokeResponse(
+        key_id=api_key.key_id,
+        revoked_at=api_key.revoked_at
+    )
 
 
 # ==================== Worker WebSocket Endpoint ====================
@@ -344,7 +492,27 @@ async def worker_websocket_endpoint(
     {"type": "ping"}
     {"type": "status", "data": {"status": "busy", "current_task": "uuid"}}
     ```
+
+    **Authentication:**
+    - Requires API key via X-Worker-API-Key header or api_key query parameter
     """
+    # Validate API key before accepting connection
+    authenticated_worker_id = await validate_worker_websocket(websocket, db)
+
+    if not authenticated_worker_id:
+        await websocket.close(code=1008, reason="Invalid or missing API key")
+        logger.warning("Worker WebSocket rejected - invalid API key", worker_id=str(worker_id))
+        return
+
+    if authenticated_worker_id != worker_id:
+        await websocket.close(code=1008, reason="API key does not match worker ID")
+        logger.warning(
+            "Worker WebSocket rejected - worker ID mismatch",
+            path_worker_id=str(worker_id),
+            auth_worker_id=str(authenticated_worker_id)
+        )
+        return
+
     # Verify worker exists
     result = await db.execute(select(Worker).where(Worker.worker_id == worker_id))
     worker = result.scalar_one_or_none()

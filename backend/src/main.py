@@ -270,6 +270,7 @@ app.add_middleware(
         "X-Requested-With",
         "Accept",
         "Origin",
+        "X-Worker-API-Key",
     ],
     expose_headers=["X-Request-ID"],
     max_age=600,  # Cache preflight requests for 10 minutes

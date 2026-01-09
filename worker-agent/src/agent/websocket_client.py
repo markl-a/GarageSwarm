@@ -37,7 +37,8 @@ class WebSocketClient:
         worker_id: UUID,
         message_handler: Callable[[dict], Any],
         on_connect: Optional[Callable[[], Any]] = None,
-        on_disconnect: Optional[Callable[[], Any]] = None
+        on_disconnect: Optional[Callable[[], Any]] = None,
+        api_key: str = ""
     ):
         """Initialize WebSocket client
 
@@ -47,12 +48,14 @@ class WebSocketClient:
             message_handler: Async function to handle incoming messages
             on_connect: Optional callback when connection established
             on_disconnect: Optional callback when connection lost
+            api_key: Worker API key for authentication
         """
         self.ws_url = ws_url
         self.worker_id = worker_id
         self.message_handler = message_handler
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        self.api_key = api_key
 
         # Connection state (use locks to prevent race conditions)
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -100,13 +103,17 @@ class WebSocketClient:
                     attempt_delay=self.reconnect_delay
                 )
 
-                # Connect to WebSocket
+                # Connect to WebSocket with API key authentication
+                extra_headers = {
+                    "X-Worker-API-Key": self.api_key,
+                }
                 async with websockets.connect(
                     ws_endpoint,
                     ping_interval=None,  # We'll handle our own heartbeat
                     ping_timeout=None,
                     close_timeout=10.0,
                     max_size=10 * 1024 * 1024,  # 10MB max message size
+                    extra_headers=extra_headers,
                 ) as websocket:
                     # Atomically update connection state
                     async with self._state_lock:

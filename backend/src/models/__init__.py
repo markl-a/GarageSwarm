@@ -7,6 +7,7 @@ SQLAlchemy ORM models for Multi-Agent on the Web platform.
 from .base import Base, BaseModel
 from .user import User
 from .worker import Worker
+from .worker_api_key import WorkerAPIKey
 from .task import Task
 from .subtask import Subtask
 from .checkpoint import Checkpoint
@@ -21,6 +22,7 @@ __all__ = [
     "BaseModel",
     "User",
     "Worker",
+    "WorkerAPIKey",
     "Task",
     "Subtask",
     "Checkpoint",

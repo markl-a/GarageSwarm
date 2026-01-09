@@ -94,6 +94,15 @@ def validate_config(config: dict):
     if not config["backend_url"].startswith(("http://", "https://")):
         raise ValueError("backend_url must start with http:// or https://")
 
+    # Validate api_key - warn if not set (required for heartbeat/websocket, but not for registration)
+    api_key = config.get("api_key", "")
+    if not api_key or api_key.strip() == "":
+        logger.warning(
+            "api_key not configured. Worker can register but heartbeat/websocket will fail. "
+            "Set WORKER_API_KEY environment variable or configure in agent.yaml after registration."
+        )
+        config["api_key"] = ""  # Ensure empty string, not None
+
     # Set defaults
     if "heartbeat_interval" not in config:
         config["heartbeat_interval"] = 30
@@ -124,11 +133,23 @@ def get_machine_id_path() -> Path:
 def load_or_create_machine_id() -> str:
     """Load existing machine ID or create a new one
 
+    Priority order:
+    1. MACHINE_ID environment variable (for Docker/container deployments)
+    2. Existing file (~/.multi_agent_worker_id)
+    3. Generate new UUID and save to file
+
     Returns:
         Machine ID string (UUID format)
     """
     import uuid
 
+    # Check environment variable first (for Docker deployments)
+    env_machine_id = os.environ.get("MACHINE_ID", "").strip()
+    if env_machine_id:
+        logger.info("Using machine ID from environment", machine_id=env_machine_id)
+        return env_machine_id
+
+    # Check existing file
     machine_id_file = get_machine_id_path()
 
     if machine_id_file.exists():
