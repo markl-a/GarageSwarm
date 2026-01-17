@@ -73,6 +73,128 @@ export GOOGLE_API_KEY=your-google-api-key
 python src/main.py --config config/agent.yaml
 ```
 
+## Docker Deployment
+
+The worker agent can be deployed as a Docker container for easy distribution and isolation.
+
+### Quick Start with Docker
+
+```bash
+# 1. Copy environment template
+cp .env.example .env
+
+# 2. Edit .env with your configuration
+#    - Set BACKEND_URL
+#    - Set WORKER_API_KEY
+#    - Set ANTHROPIC_API_KEY (or other AI tool keys)
+
+# 3. Build and run
+docker-compose up -d
+```
+
+### Docker Compose Options
+
+**Production Mode:**
+```bash
+docker-compose up -d
+```
+
+**Development Mode (with local auth mounting):**
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+### Multi-Tool Support
+
+The Docker image supports multiple AI tools. Enable them at build time:
+
+```bash
+# Build with specific tools
+INSTALL_CLAUDE_CODE=true \
+INSTALL_GEMINI_CLI=true \
+INSTALL_AIDER=true \
+docker-compose build
+
+# Or set in .env file
+```
+
+### Authentication in Docker
+
+**Option 1: API Keys (Recommended)**
+Set API keys in `.env` file:
+```bash
+ANTHROPIC_API_KEY=sk-ant-xxx
+GOOGLE_API_KEY=xxx
+OPENAI_API_KEY=sk-xxx
+```
+
+**Option 2: Mount Local Config (Development)**
+Use `docker-compose.dev.yml` to mount your local CLI configurations:
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+This mounts:
+- `~/.claude` - Claude Code CLI config
+- `~/.aider` - Aider config
+
+**Option 3: OAuth Login (Interactive)**
+For OAuth-based tools, run an interactive login first:
+```bash
+docker run -it -v claude-config:/root/.claude worker claude login
+```
+
+### Docker Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BACKEND_URL` | Backend API URL | `http://host.docker.internal:8002` |
+| `WORKER_API_KEY` | Worker authentication key | (required) |
+| `MACHINE_NAME` | Worker display name | `docker-worker` |
+| `ENABLED_TOOLS` | Comma-separated tool list | `claude_code` |
+| `DEFAULT_TOOL` | Default tool for tasks | `claude_code` |
+| `ANTHROPIC_API_KEY` | Claude/Anthropic API key | - |
+| `GOOGLE_API_KEY` | Gemini API key | - |
+| `OPENAI_API_KEY` | OpenAI API key | - |
+| `LOG_LEVEL` | Logging level | `INFO` |
+
+### Build Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `INSTALL_CLAUDE_CODE` | Install Claude Code CLI | `true` |
+| `INSTALL_GEMINI_CLI` | Install Gemini CLI | `false` |
+| `INSTALL_AIDER` | Install Aider | `false` |
+| `INSTALL_OPENHANDS` | Install OpenHands | `false` |
+
+### Docker Volumes
+
+| Volume | Purpose |
+|--------|---------|
+| `multi-agent-claude-config` | Claude CLI persistent config |
+| `multi-agent-aider-config` | Aider persistent config |
+| `./workspace` | Task workspace directory |
+
+### Health Check
+
+The container includes a health check that verifies backend connectivity:
+```bash
+docker inspect --format='{{.State.Health.Status}}' multi-agent-worker
+```
+
+### Logs
+
+View container logs:
+```bash
+docker-compose logs -f worker
+```
+
+### Stopping the Worker
+
+```bash
+docker-compose down
+```
+
 ## Project Structure
 
 ```
@@ -82,17 +204,29 @@ worker-agent/
 │   │   ├── core.py              # WorkerAgent main class
 │   │   ├── connection.py        # Connection management
 │   │   ├── executor.py          # Task execution
+│   │   ├── websocket_client.py  # WebSocket client
 │   │   └── monitor.py           # Resource monitoring
+│   ├── auth/                     # Authentication Module
+│   │   ├── base.py              # BaseAuth interface
+│   │   ├── claude_auth.py       # Claude authentication
+│   │   ├── gemini_auth.py       # Gemini authentication
+│   │   └── aider_auth.py        # Aider authentication
 │   ├── tools/                    # AI Tool Adapters
 │   │   ├── base.py              # BaseTool interface
-│   │   ├── claude.py            # Claude Code integration
+│   │   ├── claude_code.py       # Claude Code CLI integration
 │   │   ├── gemini.py            # Gemini CLI integration
 │   │   └── ollama.py            # Ollama integration
 │   └── main.py                   # CLI entry point
 ├── config/
-│   └── agent.yaml.example
-├── tests/
-├── logs/
+│   ├── agent.yaml               # Local configuration
+│   ├── agent.docker.yaml        # Docker configuration
+│   └── tools.yaml               # Tool definitions
+├── scripts/
+│   └── entrypoint.sh            # Docker entrypoint
+├── Dockerfile                    # Multi-tool Docker image
+├── docker-compose.yml           # Production compose
+├── docker-compose.dev.yml       # Development compose
+├── .env.example                 # Environment template
 ├── requirements.txt
 └── README.md
 ```

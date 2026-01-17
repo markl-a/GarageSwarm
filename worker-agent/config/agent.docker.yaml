@@ -1,8 +1,8 @@
 # Worker Agent Configuration - Docker Environment
 
 # Backend Connection
-# Use Docker network hostname (service name in docker-compose)
-backend_url: "http://backend:8000"
+# Use host.docker.internal to connect to host machine
+backend_url: "http://host.docker.internal:8002"
 
 # Worker API Key (required for authentication)
 # Set via environment variable: WORKER_API_KEY

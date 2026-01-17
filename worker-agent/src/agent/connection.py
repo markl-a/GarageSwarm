@@ -126,7 +126,10 @@ class ConnectionManager:
 
         Args:
             worker_id: Worker UUID
-            resources: Current resource usage dictionary
+            resources: Current resource usage dictionary with keys:
+                - cpu_percent: CPU usage percentage
+                - memory_percent: Memory usage percentage
+                - disk_percent: Disk usage percentage
             status: Worker status (online, busy, idle)
 
         Returns:
@@ -142,7 +145,9 @@ class ConnectionManager:
             f"/api/v1/workers/{worker_id}/heartbeat",
             json={
                 "status": status,
-                "resources": resources
+                "cpu_percent": resources.get("cpu_percent"),
+                "memory_percent": resources.get("memory_percent"),
+                "disk_percent": resources.get("disk_percent"),
             }
         )
         response.raise_for_status()
@@ -298,7 +303,9 @@ class ConnectionManager:
                 f"/api/v1/workers/{worker_id}/heartbeat",
                 json={
                     "status": "offline",
-                    "resources": resources
+                    "cpu_percent": resources.get("cpu_percent"),
+                    "memory_percent": resources.get("memory_percent"),
+                    "disk_percent": resources.get("disk_percent"),
                 }
             )
             response.raise_for_status()
@@ -325,7 +332,7 @@ class ConnectionManager:
 
         try:
             response = await self.client.get(
-                f"/api/v1/workers/{worker_id}/tasks",
+                f"/api/v1/workers/{worker_id}/pull-task",
                 timeout=10.0
             )
 
@@ -334,12 +341,29 @@ class ConnectionManager:
                 return None
 
             response.raise_for_status()
-            task_data = response.json()
+            backend_data = response.json()
+
+            # No task available (null response)
+            if backend_data is None:
+                return None
+
+            # Map backend field names to worker-agent expected format
+            # Backend sends: task_id, description, tool_preference, priority, workflow_id, metadata
+            # Worker expects: subtask_id, description, assigned_tool, context
+            task_data = {
+                "subtask_id": str(backend_data.get("task_id")),
+                "description": backend_data.get("description"),
+                "assigned_tool": backend_data.get("tool_preference") or "claude_code",  # Default to claude_code
+                "context": backend_data.get("metadata") or {},
+                "priority": backend_data.get("priority"),
+                "workflow_id": str(backend_data.get("workflow_id")) if backend_data.get("workflow_id") else None,
+            }
 
             logger.info(
                 "Task polled from backend",
                 worker_id=str(worker_id),
-                subtask_id=task_data.get("subtask_id")
+                subtask_id=task_data.get("subtask_id"),
+                tool=task_data.get("assigned_tool")
             )
 
             return task_data
@@ -356,13 +380,15 @@ class ConnectionManager:
 
     async def upload_subtask_result(
         self,
+        worker_id: UUID,
         subtask_id: UUID,
         result: dict
     ) -> dict:
         """Upload subtask execution result to backend
 
         Args:
-            subtask_id: Subtask UUID
+            worker_id: Worker UUID
+            subtask_id: Task/Subtask UUID
             result: Result dictionary containing:
                 - success: bool
                 - output: Any - Execution output
@@ -379,32 +405,43 @@ class ConnectionManager:
         if not self.client:
             await self.connect()
 
-        # Convert internal result format to backend SubtaskResultRequest format
         success = result.get("success", False)
-        request_body = {
-            "status": "completed" if success else "failed",
-            "result": {
-                "output": result.get("output"),
-                "metadata": result.get("metadata", {})
-            },
-            "execution_time": result.get("execution_time", 0.0),
-            "error": result.get("error") if not success else None
-        }
 
         logger.info(
-            "Uploading subtask result",
-            subtask_id=str(subtask_id),
-            success=success,
-            status=request_body["status"]
+            "Uploading task result",
+            worker_id=str(worker_id),
+            task_id=str(subtask_id),
+            success=success
         )
 
-        response = await self.client.post(
-            f"/api/v1/subtasks/{subtask_id}/result",
-            json=request_body
-        )
+        if success:
+            # Use task-complete endpoint
+            request_body = {
+                "task_id": str(subtask_id),
+                "result": {
+                    "output": result.get("output"),
+                    "metadata": result.get("metadata", {}),
+                    "execution_time": result.get("execution_time", 0.0)
+                }
+            }
+            response = await self.client.post(
+                f"/api/v1/workers/{worker_id}/task-complete",
+                json=request_body
+            )
+        else:
+            # Use task-failed endpoint
+            request_body = {
+                "task_id": str(subtask_id),
+                "error": result.get("error", "Unknown error")
+            }
+            response = await self.client.post(
+                f"/api/v1/workers/{worker_id}/task-failed",
+                json=request_body
+            )
+
         response.raise_for_status()
 
-        logger.info("Subtask result uploaded successfully", subtask_id=str(subtask_id))
+        logger.info("Task result uploaded successfully", task_id=str(subtask_id))
         return response.json()
 
     async def stream_execution_log(

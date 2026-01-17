@@ -1,0 +1,38 @@
+# Development Override - Mount local authentication
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# This mounts your local CLI tool configurations into the container,
+# allowing you to use existing authentication without re-login.
+
+services:
+  worker:
+    build:
+      args:
+        # Install all tools for development
+        INSTALL_CLAUDE_CODE: "true"
+        INSTALL_GEMINI_CLI: "true"
+        INSTALL_AIDER: "true"
+
+    environment:
+      - LOG_LEVEL=DEBUG
+      - ENABLED_TOOLS=claude_code,gemini_cli,aider
+
+    volumes:
+      # Mount local source code for hot reload
+      - ./src:/app/src:ro
+      - ./config:/app/config:ro
+
+      # Mount local tool authentication
+      # Note: Claude Code needs write access for projects directory
+      # Linux/Mac
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.aider:/root/.aider:ro
+
+      # Uncomment for Windows (PowerShell)
+      # - ${USERPROFILE}/.claude:/root/.claude
+      # - ${USERPROFILE}/.aider:/root/.aider:ro
+
+      # Development workspace
+      - ./workspace:/workspace

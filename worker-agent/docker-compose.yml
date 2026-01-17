@@ -1,0 +1,85 @@
+# Multi-Agent Worker - Docker Compose Configuration
+#
+# Quick Start:
+#   1. Copy .env.example to .env and configure
+#   2. Run: docker-compose up -d
+#
+# For development with local auth:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Enable/disable tools at build time
+        INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-false}
+        INSTALL_AIDER: ${INSTALL_AIDER:-false}
+        INSTALL_OPENHANDS: ${INSTALL_OPENHANDS:-false}
+
+    container_name: multi-agent-worker
+
+    # Use Docker-specific configuration
+    command: ["python", "src/main.py", "--config", "config/agent.docker.yaml"]
+
+    environment:
+      # Backend connection
+      - BACKEND_URL=${BACKEND_URL:-http://host.docker.internal:8002}
+      - WORKER_API_KEY=${WORKER_API_KEY:-}
+
+      # Worker identification
+      - MACHINE_NAME=${MACHINE_NAME:-docker-worker}
+      - MACHINE_ID=${MACHINE_ID:-}
+
+      # Tool API Keys (set in .env file)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Tool configuration
+      - ENABLED_TOOLS=${ENABLED_TOOLS:-claude_code}
+      - DEFAULT_TOOL=${DEFAULT_TOOL:-claude_code}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      # Workspace for code execution
+      - ${WORKSPACE_PATH:-./workspace}:/workspace
+
+      # Persistent tool configurations
+      - claude-config:/root/.claude
+      - aider-config:/root/.aider
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (optional, uncomment to enable)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 4G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+    # Network configuration
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes for persistent data
+volumes:
+  claude-config:
+    name: multi-agent-claude-config
+  aider-config:
+    name: multi-agent-aider-config

@@ -285,6 +285,9 @@ class ClaudeCodeTool(BaseTool):
             # Build command
             cmd = [self.cli_path]
 
+            # Add print mode flag for non-interactive execution
+            cmd.extend(["-p"])
+
             # Add additional arguments
             if additional_args:
                 cmd.extend(additional_args)
@@ -297,20 +300,21 @@ class ClaudeCodeTool(BaseTool):
                     else:
                         logger.warning("File not found", file_path=file_path)
 
-            # Add the prompt/instructions
-            cmd.append(instructions)
+            # Note: Instructions are passed via stdin for better handling of long prompts
+            # cmd.append(instructions)  # Removed - using stdin instead
 
             # Prepare environment variables
             env = os.environ.copy()
             env.update(self.env_vars)
 
-            # Execute subprocess
+            # Execute subprocess with stdin input
             result = await self._run_subprocess(
                 cmd=cmd,
                 working_dir=working_dir,
                 timeout=timeout,
                 env=env,
-                stream=stream_output
+                stream=stream_output,
+                stdin_input=instructions  # Pass instructions via stdin
             )
 
             duration = time.time() - start_time
@@ -401,7 +405,8 @@ class ClaudeCodeTool(BaseTool):
         working_dir: Optional[str],
         timeout: int,
         env: Dict[str, str],
-        stream: bool = True
+        stream: bool = True,
+        stdin_input: Optional[str] = None
     ) -> Dict[str, Any]:
         """Run subprocess with timeout and stream support
 
@@ -411,15 +416,17 @@ class ClaudeCodeTool(BaseTool):
             timeout: Timeout in seconds
             env: Environment variables
             stream: Whether to stream output
+            stdin_input: Optional input to send via stdin
 
         Returns:
             Dictionary with stdout, stderr, and exit_code
         """
-        logger.debug("Starting subprocess", command=" ".join(cmd))
+        logger.debug("Starting subprocess", command=" ".join(cmd), has_stdin=stdin_input is not None)
 
-        # Create subprocess
+        # Create subprocess with stdin if input provided
         process = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE if stdin_input else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
@@ -456,6 +463,14 @@ class ClaudeCodeTool(BaseTool):
                 logger.warning(f"Error reading {stream_name}", error=str(e))
 
         try:
+            # Write stdin input if provided
+            if stdin_input and process.stdin:
+                process.stdin.write(stdin_input.encode('utf-8'))
+                await process.stdin.drain()
+                process.stdin.close()
+                await process.stdin.wait_closed()
+                logger.debug("Stdin input sent to subprocess")
+
             # Read stdout and stderr concurrently with timeout
             await asyncio.wait_for(
                 asyncio.gather(

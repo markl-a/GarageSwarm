@@ -501,6 +501,7 @@ class WorkerAgent:
 
             # Step 5: Upload result to backend using new endpoint
             await self.connection_manager.upload_subtask_result(
+                worker_id=self.worker_id,
                 subtask_id=UUID(subtask_id),
                 result=result
             )
@@ -524,6 +525,7 @@ class WorkerAgent:
             # Report error using new endpoint
             try:
                 await self.connection_manager.upload_subtask_result(
+                    worker_id=self.worker_id,
                     subtask_id=UUID(subtask_id),
                     result={
                         "success": False,

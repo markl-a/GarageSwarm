@@ -1,0 +1,263 @@
+# Multi-Agent Worker - AI Tools Configuration
+# ============================================
+#
+# This file defines all supported AI tools and their configurations.
+# Each tool can be enabled/disabled via the ENABLED_TOOLS environment variable.
+#
+# Environment Variables:
+#   ENABLED_TOOLS=claude_code,gemini_cli,aider
+#   DEFAULT_TOOL=claude_code
+
+# Tool Registry
+# =============
+# List of all available tools with their metadata
+tools:
+  # Claude Code CLI (Anthropic)
+  claude_code:
+    name: "Claude Code"
+    description: "Anthropic's Claude Code CLI for AI-powered coding"
+    provider: "anthropic"
+    type: "cli"
+    enabled: true
+
+    # CLI configuration
+    cli:
+      command: "claude"
+      args: ["-p"]  # Print mode for non-interactive execution
+      timeout: 300  # 5 minutes default timeout
+
+    # Authentication
+    auth:
+      type: "api_key"
+      env_vars:
+        - "ANTHROPIC_API_KEY"
+      config_paths:
+        - "~/.claude/config.json"
+        - "~/.claude.json"
+      oauth_supported: true
+
+    # Capabilities
+    capabilities:
+      - "code_generation"
+      - "code_editing"
+      - "code_analysis"
+      - "debugging"
+      - "refactoring"
+      - "testing"
+      - "documentation"
+
+    # Platform support
+    platforms:
+      - "linux"
+      - "macos"
+      - "windows"
+
+  # Gemini CLI (Google)
+  gemini_cli:
+    name: "Gemini CLI"
+    description: "Google's Gemini AI via google-generativeai library"
+    provider: "google"
+    type: "python_library"
+    enabled: false  # Enable with INSTALL_GEMINI_CLI=true
+
+    # Python module configuration
+    python:
+      module: "google.generativeai"
+      entry_point: "gemini"
+
+    # Authentication
+    auth:
+      type: "api_key"
+      env_vars:
+        - "GOOGLE_API_KEY"
+        - "GEMINI_API_KEY"
+      gcloud_supported: true
+
+    # Model configuration
+    models:
+      default: "gemini-pro"
+      available:
+        - "gemini-pro"
+        - "gemini-pro-vision"
+        - "gemini-1.5-pro"
+        - "gemini-1.5-flash"
+
+    # Capabilities
+    capabilities:
+      - "code_generation"
+      - "code_analysis"
+      - "multimodal"
+      - "long_context"
+
+    platforms:
+      - "linux"
+      - "macos"
+      - "windows"
+
+  # Aider (Multi-provider)
+  aider:
+    name: "Aider"
+    description: "AI pair programming tool supporting multiple LLM providers"
+    provider: "multi"
+    type: "cli"
+    enabled: false  # Enable with INSTALL_AIDER=true
+
+    # CLI configuration
+    cli:
+      command: "aider"
+      args: ["--no-auto-commits", "--no-check-update"]
+      timeout: 600  # 10 minutes default
+
+    # Authentication (supports multiple providers)
+    auth:
+      type: "multi_provider"
+      providers:
+        openai:
+          env_vars: ["OPENAI_API_KEY"]
+        anthropic:
+          env_vars: ["ANTHROPIC_API_KEY"]
+        azure:
+          env_vars: ["AZURE_API_KEY", "AZURE_OPENAI_API_KEY"]
+        ollama:
+          type: "local"
+          base_url_env: "OLLAMA_API_BASE"
+          default_url: "http://localhost:11434"
+
+    # Model configuration
+    models:
+      default: "gpt-4"
+      available:
+        - "gpt-4"
+        - "gpt-3.5-turbo"
+        - "claude-3-opus-20240229"
+        - "claude-3-sonnet-20240229"
+        - "ollama/codellama"
+        - "ollama/deepseek-coder"
+
+    # Capabilities
+    capabilities:
+      - "code_generation"
+      - "code_editing"
+      - "git_integration"
+      - "multi_file_editing"
+      - "repo_map"
+
+    platforms:
+      - "linux"
+      - "macos"
+      - "windows"
+
+  # OpenHands (formerly OpenDevin)
+  openhands:
+    name: "OpenHands"
+    description: "Autonomous AI agent for software development"
+    provider: "multi"
+    type: "python_library"
+    enabled: false  # Enable with INSTALL_OPENHANDS=true
+
+    # Python module configuration
+    python:
+      module: "openhands"
+      entry_point: "openhands.core.main"
+
+    # Authentication
+    auth:
+      type: "multi_provider"
+      providers:
+        openai:
+          env_vars: ["OPENAI_API_KEY"]
+        anthropic:
+          env_vars: ["ANTHROPIC_API_KEY"]
+
+    # Capabilities
+    capabilities:
+      - "code_generation"
+      - "code_editing"
+      - "autonomous_execution"
+      - "browser_automation"
+      - "file_management"
+
+    platforms:
+      - "linux"
+      - "macos"
+      # Note: Windows support may be limited
+
+  # Ollama (Local LLM)
+  ollama:
+    name: "Ollama"
+    description: "Local LLM inference for private, offline AI"
+    provider: "local"
+    type: "api"
+    enabled: false  # Enable if Ollama is running locally
+
+    # API configuration
+    api:
+      base_url: "${OLLAMA_API_BASE:-http://localhost:11434}"
+      timeout: 600
+
+    # No API key required for local Ollama
+    auth:
+      type: "none"
+
+    # Model configuration
+    models:
+      default: "codellama"
+      available:
+        - "codellama"
+        - "codellama:13b"
+        - "codellama:34b"
+        - "deepseek-coder"
+        - "deepseek-coder:6.7b"
+        - "llama3"
+        - "mistral"
+
+    # Capabilities
+    capabilities:
+      - "code_generation"
+      - "code_completion"
+      - "offline"
+      - "private"
+
+    platforms:
+      - "linux"
+      - "macos"
+      - "windows"
+
+# Default Configuration
+# =====================
+defaults:
+  # Default tool to use when not specified
+  default_tool: "claude_code"
+
+  # Task execution settings
+  execution:
+    timeout_seconds: 300
+    max_retries: 3
+    retry_delay_seconds: 1
+
+  # Output settings
+  output:
+    parse_json: true
+    stream: true
+    max_output_length: 100000  # 100KB
+
+# Docker Configuration
+# ====================
+docker:
+  # Volume mounts for tool configurations
+  volumes:
+    claude_code:
+      - "/root/.claude"
+    aider:
+      - "/root/.aider"
+    gemini_cli:
+      - "/root/.config/gcloud"
+
+  # Environment variables to pass through
+  env_passthrough:
+    - "ANTHROPIC_API_KEY"
+    - "OPENAI_API_KEY"
+    - "GOOGLE_API_KEY"
+    - "GEMINI_API_KEY"
+    - "AZURE_API_KEY"
+    - "OLLAMA_API_BASE"
