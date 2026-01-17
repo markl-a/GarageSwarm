@@ -690,19 +690,16 @@ class WorkerService {
       let output = '';
       let stderr = '';
 
+      // Build command with prompt as positional argument
       const args = [
-        '--model', context.model || 'gemini-1.5-flash',
-        '--format', 'text'
+        '-m', context.model || 'gemini-2.0-flash',
+        instructions
       ];
 
       const proc = spawn('gemini', args, {
         shell: true,
         env: { ...process.env }
       });
-
-      // Send instructions via stdin
-      proc.stdin.write(instructions);
-      proc.stdin.end();
 
       proc.stdout.on('data', (data) => {
         output += data.toString();
