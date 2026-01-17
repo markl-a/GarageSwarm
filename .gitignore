@@ -195,6 +195,15 @@ $RECYCLE.BIN/
 nul
 multi-agent-web/
 
+# Electron build output
+worker-desktop/dist/
+worker-desktop/out/
+
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+
 # Temporary summary/report files (prevent clutter)
 *-SUMMARY.md
 *-REPORT.md
