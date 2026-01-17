@@ -256,6 +256,113 @@
       font-size: 12px;
       white-space: pre-wrap;
     }
+
+    /* Tools Section */
+    .tools-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .tools-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .tools-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .tool-item {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tool-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .tool-icon.claude { background: linear-gradient(135deg, #d97706 0%, #ea580c 100%); }
+    .tool-icon.gemini { background: linear-gradient(135deg, #4285f4 0%, #34a853 100%); }
+    .tool-icon.ollama { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); }
+    .tool-icon.aider { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+    .tool-icon.default { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); }
+
+    .tool-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tool-name {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tool-version {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.5);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tool-status {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00d26a;
+    }
+
+    .tools-empty {
+      text-align: center;
+      padding: 20px;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 13px;
+    }
+
+    .btn-refresh {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .btn-refresh:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-refresh:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -299,6 +406,17 @@
       </div>
     </div>
 
+    <!-- AI Tools Section -->
+    <div class="tools-card">
+      <div class="tools-header">
+        <h3>AI Tools</h3>
+        <button class="btn-refresh" id="refreshToolsBtn">Refresh</button>
+      </div>
+      <div class="tools-grid" id="toolsGrid">
+        <div class="tools-empty">Detecting tools...</div>
+      </div>
+    </div>
+
     <div class="logs-card">
       <div class="logs-header">
         <h3>Activity Log</h3>
@@ -325,6 +443,15 @@
 
   <script>
     let currentStatus = 'disconnected';
+    let detectedTools = [];
+
+    // Tool icon mapping
+    const toolIcons = {
+      'claude_code': { icon: 'C', class: 'claude' },
+      'gemini_cli': { icon: 'G', class: 'gemini' },
+      'ollama': { icon: 'O', class: 'ollama' },
+      'aider': { icon: 'A', class: 'aider' }
+    };
 
     // Status mapping
     const statusLabels = {
@@ -365,7 +492,65 @@
           document.getElementById('machineId').textContent = status.machineId.substring(0, 20) + '...';
         }
         document.getElementById('currentTask').textContent = status.currentTask || 'None';
+
+        // Update tools if available in status
+        if (status.tools && status.tools.length > 0) {
+          // Convert tool IDs to tool info format
+          const toolsInfo = status.tools.map(id => ({
+            id: id,
+            name: toolIcons[id]?.class ? id.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) : id,
+            version: status.toolVersions?.[id] || ''
+          }));
+          renderTools(toolsInfo);
+        }
       }
+    }
+
+    function renderTools(tools) {
+      detectedTools = tools || [];
+      const grid = document.getElementById('toolsGrid');
+
+      if (!detectedTools || detectedTools.length === 0) {
+        grid.innerHTML = '<div class="tools-empty">No AI tools detected. Install Claude Code, Gemini CLI, or Ollama.</div>';
+        return;
+      }
+
+      grid.innerHTML = detectedTools.map(tool => {
+        const iconConfig = toolIcons[tool.id] || { icon: '?', class: 'default' };
+        const versionText = tool.version ? tool.version.substring(0, 20) : 'unknown';
+
+        return `
+          <div class="tool-item">
+            <div class="tool-icon ${iconConfig.class}">${iconConfig.icon}</div>
+            <div class="tool-info">
+              <div class="tool-name">${tool.name}</div>
+              <div class="tool-version">${versionText}</div>
+            </div>
+            <div class="tool-status"></div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function refreshTools() {
+      const btn = document.getElementById('refreshToolsBtn');
+      btn.disabled = true;
+      btn.textContent = 'Detecting...';
+
+      try {
+        const result = await window.workerAPI.detectTools();
+        if (result.success) {
+          renderTools(result.tools);
+          addLog({ level: 'info', message: `Detected ${result.tools.length} AI tools` });
+        } else {
+          addLog({ level: 'error', message: `Tool detection failed: ${result.error}` });
+        }
+      } catch (error) {
+        addLog({ level: 'error', message: `Tool detection error: ${error.message}` });
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
     }
 
     function addLog(log) {
@@ -416,6 +601,20 @@
       window.workerAPI.onWorkerLog((log) => {
         addLog(log);
       });
+
+      // Listen for tools updates
+      window.workerAPI.onToolsUpdate((tools) => {
+        renderTools(tools);
+      });
+
+      // Load initial tools
+      const tools = await window.workerAPI.getAvailableTools();
+      if (tools && tools.length > 0) {
+        renderTools(tools);
+      } else {
+        // Auto-detect tools on load
+        refreshTools();
+      }
     });
 
     // Start button
@@ -458,6 +657,9 @@
       document.getElementById('logsContent').innerHTML = '';
       addLog({ level: 'info', message: 'Logs cleared' });
     });
+
+    // Refresh tools
+    document.getElementById('refreshToolsBtn').addEventListener('click', refreshTools);
 
     // Remote command execution
     document.getElementById('executeBtn').addEventListener('click', executeCommand);
