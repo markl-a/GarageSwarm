@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('workerAPI', {
   startWorker: () => ipcRenderer.invoke('start-worker'),
   stopWorker: () => ipcRenderer.invoke('stop-worker'),
   getWorkerStatus: () => ipcRenderer.invoke('get-worker-status'),
+  getAvailableTools: () => ipcRenderer.invoke('get-available-tools'),
+  detectTools: () => ipcRenderer.invoke('detect-tools'),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
@@ -31,6 +33,9 @@ contextBridge.exposeInMainWorld('workerAPI', {
   },
   onWorkerLog: (callback) => {
     ipcRenderer.on('worker-log', (event, log) => callback(log));
+  },
+  onToolsUpdate: (callback) => {
+    ipcRenderer.on('tools-update', (event, tools) => callback(tools));
   },
   onNavigate: (callback) => {
     ipcRenderer.on('navigate', (event, page) => callback(page));

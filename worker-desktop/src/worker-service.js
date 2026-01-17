@@ -10,8 +10,38 @@ dns.setDefaultResultOrder('ipv4first');
 const WebSocket = require('ws');
 const os = require('os');
 const si = require('systeminformation');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
+const http = require('http');
+
+// Supported AI Tools
+const AI_TOOLS = {
+  claude_code: {
+    name: 'Claude Code',
+    command: 'claude',
+    checkArgs: ['--version'],
+    provider: 'anthropic'
+  },
+  gemini_cli: {
+    name: 'Gemini CLI',
+    command: 'gemini',
+    checkArgs: ['--version'],
+    provider: 'google'
+  },
+  ollama: {
+    name: 'Ollama',
+    command: 'ollama',
+    checkArgs: ['--version'],
+    provider: 'ollama',
+    httpCheck: 'http://localhost:11434/api/tags'
+  },
+  aider: {
+    name: 'Aider',
+    command: 'aider',
+    checkArgs: ['--version'],
+    provider: 'aider'
+  }
+};
 
 class WorkerService {
   constructor(backendUrl) {
@@ -27,6 +57,10 @@ class WorkerService {
 
     this.statusCallback = null;
     this.logCallback = null;
+    this.toolsCallback = null;
+
+    this.availableTools = [];
+    this.toolVersions = {};
 
     this.heartbeatInterval = null;
     this.pollingInterval = null;
@@ -61,6 +95,123 @@ class WorkerService {
 
   onLog(callback) {
     this.logCallback = callback;
+  }
+
+  onToolsUpdate(callback) {
+    this.toolsCallback = callback;
+  }
+
+  // ============ Tool Detection ============
+
+  async detectAvailableTools() {
+    this.log('info', 'Detecting available AI tools...');
+    const detected = [];
+    const versions = {};
+
+    for (const [toolId, toolConfig] of Object.entries(AI_TOOLS)) {
+      try {
+        const result = await this.checkToolAvailability(toolId, toolConfig);
+        if (result.available) {
+          detected.push(toolId);
+          versions[toolId] = result.version;
+          this.log('info', `Found ${toolConfig.name}`, { version: result.version });
+        }
+      } catch (error) {
+        this.log('debug', `${toolConfig.name} not available`, { error: error.message });
+      }
+    }
+
+    this.availableTools = detected;
+    this.toolVersions = versions;
+
+    if (this.toolsCallback) {
+      this.toolsCallback(this.getToolsInfo());
+    }
+
+    this.log('info', `Detected ${detected.length} AI tools`, { tools: detected });
+    return detected;
+  }
+
+  async checkToolAvailability(toolId, toolConfig) {
+    // Special handling for Ollama (HTTP check)
+    if (toolConfig.httpCheck) {
+      return await this.checkOllamaAvailability(toolConfig);
+    }
+
+    // CLI-based tools
+    return new Promise((resolve) => {
+      const proc = spawn(toolConfig.command, toolConfig.checkArgs, {
+        shell: true,
+        timeout: 5000
+      });
+
+      let output = '';
+      proc.stdout.on('data', (data) => { output += data.toString(); });
+      proc.stderr.on('data', (data) => { output += data.toString(); });
+
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve({ available: true, version: output.trim().split('\n')[0] });
+        } else {
+          resolve({ available: false });
+        }
+      });
+
+      proc.on('error', () => {
+        resolve({ available: false });
+      });
+
+      // Timeout
+      setTimeout(() => {
+        proc.kill();
+        resolve({ available: false });
+      }, 5000);
+    });
+  }
+
+  async checkOllamaAvailability(toolConfig) {
+    return new Promise((resolve) => {
+      const url = new URL(toolConfig.httpCheck);
+      const req = http.get({
+        hostname: url.hostname,
+        port: url.port || 80,
+        path: url.pathname,
+        timeout: 3000
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            const modelCount = json.models?.length || 0;
+            resolve({
+              available: true,
+              version: `${modelCount} models available`
+            });
+          } catch {
+            resolve({ available: true, version: 'running' });
+          }
+        });
+      });
+
+      req.on('error', () => {
+        resolve({ available: false });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        resolve({ available: false });
+      });
+    });
+  }
+
+  getToolsInfo() {
+    return this.availableTools.map(toolId => ({
+      id: toolId,
+      name: AI_TOOLS[toolId].name,
+      provider: AI_TOOLS[toolId].provider,
+      version: this.toolVersions[toolId] || 'unknown'
+    }));
   }
 
   updateStatus(status) {
@@ -181,6 +332,13 @@ class WorkerService {
     this.log('info', 'Starting worker service');
 
     try {
+      // Detect available AI tools
+      await this.detectAvailableTools();
+
+      if (this.availableTools.length === 0) {
+        throw new Error('No AI tools available. Please install Claude Code, Gemini CLI, or Ollama.');
+      }
+
       // Register with backend
       await this.register();
 
@@ -250,7 +408,8 @@ class WorkerService {
         machine_id: this.machineId,
         machine_name: `${os.hostname()} (Desktop App)`,
         system_info: systemInfo,
-        tools: ['claude_code']
+        tools: this.availableTools,
+        tool_versions: this.toolVersions
       },
       {
         headers: { 'X-Worker-API-Key': this.token }
@@ -258,7 +417,10 @@ class WorkerService {
     );
 
     this.workerId = response.data.worker_id;
-    this.log('info', 'Worker registered', { workerId: this.workerId });
+    this.log('info', 'Worker registered', {
+      workerId: this.workerId,
+      tools: this.availableTools
+    });
   }
 
   startHeartbeat() {
@@ -393,14 +555,20 @@ class WorkerService {
 
   async executeTask(taskData) {
     const taskId = taskData.task_id || taskData.subtask_id;
-    this.log('info', 'Executing task', { taskId, description: taskData.description?.substring(0, 100) });
+    const preferredTool = taskData.tool || taskData.preferred_tool || this.availableTools[0];
+
+    this.log('info', 'Executing task', {
+      taskId,
+      tool: preferredTool,
+      description: taskData.description?.substring(0, 100)
+    });
 
     this.currentTask = taskId;
     this.updateStatus('busy');
 
     try {
-      // Execute with Claude Code CLI
-      const result = await this.runClaudeCode(taskData.description);
+      // Execute with the specified or default tool
+      const result = await this.runAITool(preferredTool, taskData.description, taskData.context);
 
       // Report success
       await axios.post(
@@ -442,7 +610,28 @@ class WorkerService {
     }
   }
 
-  async runClaudeCode(instructions) {
+  // ============ AI Tool Execution ============
+
+  async runAITool(toolId, instructions, context = {}) {
+    if (!this.availableTools.includes(toolId)) {
+      throw new Error(`Tool ${toolId} not available. Available: ${this.availableTools.join(', ')}`);
+    }
+
+    switch (toolId) {
+      case 'claude_code':
+        return await this.runClaudeCode(instructions, context);
+      case 'gemini_cli':
+        return await this.runGeminiCLI(instructions, context);
+      case 'ollama':
+        return await this.runOllama(instructions, context);
+      case 'aider':
+        return await this.runAider(instructions, context);
+      default:
+        throw new Error(`Unknown tool: ${toolId}`);
+    }
+  }
+
+  async runClaudeCode(instructions, context = {}) {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       let output = '';
@@ -473,6 +662,7 @@ class WorkerService {
           resolve({
             output: output.trim(),
             metadata: {
+              tool: 'claude_code',
               duration,
               exitCode: code
             }
@@ -489,8 +679,186 @@ class WorkerService {
       // Timeout after 5 minutes
       setTimeout(() => {
         proc.kill();
-        reject(new Error('Task execution timeout (5 minutes)'));
+        reject(new Error('Claude Code execution timeout (5 minutes)'));
       }, 5 * 60 * 1000);
+    });
+  }
+
+  async runGeminiCLI(instructions, context = {}) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      let output = '';
+      let stderr = '';
+
+      const args = [
+        '--model', context.model || 'gemini-1.5-flash',
+        '--format', 'text'
+      ];
+
+      const proc = spawn('gemini', args, {
+        shell: true,
+        env: { ...process.env }
+      });
+
+      // Send instructions via stdin
+      proc.stdin.write(instructions);
+      proc.stdin.end();
+
+      proc.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        const duration = (Date.now() - startTime) / 1000;
+
+        if (code === 0) {
+          resolve({
+            output: output.trim(),
+            metadata: {
+              tool: 'gemini_cli',
+              model: context.model || 'gemini-1.5-flash',
+              duration,
+              exitCode: code
+            }
+          });
+        } else {
+          reject(new Error(`Gemini CLI failed (exit ${code}): ${stderr || output}`));
+        }
+      });
+
+      proc.on('error', (error) => {
+        reject(new Error(`Failed to run Gemini CLI: ${error.message}`));
+      });
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        proc.kill();
+        reject(new Error('Gemini CLI execution timeout (5 minutes)'));
+      }, 5 * 60 * 1000);
+    });
+  }
+
+  async runOllama(instructions, context = {}) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const model = context.model || 'llama2';
+      const ollamaUrl = context.url || 'http://localhost:11434';
+
+      const payload = JSON.stringify({
+        model: model,
+        prompt: instructions,
+        stream: false
+      });
+
+      const url = new URL(`${ollamaUrl}/api/generate`);
+      const options = {
+        hostname: url.hostname,
+        port: url.port || 11434,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload)
+        },
+        timeout: 5 * 60 * 1000 // 5 minutes
+      };
+
+      const req = http.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          const duration = (Date.now() - startTime) / 1000;
+          try {
+            const json = JSON.parse(data);
+            resolve({
+              output: json.response || '',
+              metadata: {
+                tool: 'ollama',
+                model: model,
+                duration,
+                evalCount: json.eval_count,
+                promptEvalCount: json.prompt_eval_count
+              }
+            });
+          } catch (e) {
+            reject(new Error(`Failed to parse Ollama response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        reject(new Error(`Ollama request failed: ${error.message}`));
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Ollama execution timeout (5 minutes)'));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  async runAider(instructions, context = {}) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      let output = '';
+      let stderr = '';
+
+      const args = ['--message', instructions];
+
+      // Add working directory if provided
+      if (context.workingDirectory) {
+        args.push('--directory', context.workingDirectory);
+      }
+
+      // Add yes-always to avoid prompts
+      args.push('--yes-always');
+
+      const proc = spawn('aider', args, {
+        shell: true,
+        env: { ...process.env }
+      });
+
+      proc.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        const duration = (Date.now() - startTime) / 1000;
+
+        if (code === 0) {
+          resolve({
+            output: output.trim(),
+            metadata: {
+              tool: 'aider',
+              duration,
+              exitCode: code
+            }
+          });
+        } else {
+          reject(new Error(`Aider failed (exit ${code}): ${stderr || output}`));
+        }
+      });
+
+      proc.on('error', (error) => {
+        reject(new Error(`Failed to run Aider: ${error.message}`));
+      });
+
+      // Timeout after 10 minutes (Aider can be slower)
+      setTimeout(() => {
+        proc.kill();
+        reject(new Error('Aider execution timeout (10 minutes)'));
+      }, 10 * 60 * 1000);
     });
   }
 
@@ -499,7 +867,6 @@ class WorkerService {
     this.log('info', 'Executing remote command', { command: command.substring(0, 50) });
 
     try {
-      const { exec } = require('child_process');
       const result = await new Promise((resolve) => {
         exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
           resolve({
@@ -530,8 +897,14 @@ class WorkerService {
       workerId: this.workerId,
       machineId: this.machineId,
       currentTask: this.currentTask,
-      isRunning: this.isRunning
+      isRunning: this.isRunning,
+      tools: this.availableTools,
+      toolVersions: this.toolVersions
     };
+  }
+
+  getAvailableTools() {
+    return this.getToolsInfo();
   }
 }
 

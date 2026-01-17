@@ -279,6 +279,13 @@ function setupIpcHandlers() {
         }
       });
 
+      // Set up tools update callback
+      workerService.onToolsUpdate((tools) => {
+        if (mainWindow) {
+          mainWindow.webContents.send('tools-update', tools);
+        }
+      });
+
       await workerService.start();
       return { success: true };
     } catch (error) {
@@ -322,7 +329,29 @@ function setupIpcHandlers() {
     if (workerService) {
       return workerService.getStatus();
     }
-    return { status: 'disconnected', workerId: null };
+    return { status: 'disconnected', workerId: null, tools: [] };
+  });
+
+  // Get available AI tools
+  ipcMain.handle('get-available-tools', () => {
+    if (workerService) {
+      return workerService.getAvailableTools();
+    }
+    return [];
+  });
+
+  // Detect available AI tools
+  ipcMain.handle('detect-tools', async () => {
+    try {
+      if (!workerService) {
+        const backendUrl = store.get('backendUrl') || 'http://127.0.0.1:8002';
+        workerService = new WorkerService(backendUrl);
+      }
+      const tools = await workerService.detectAvailableTools();
+      return { success: true, tools: workerService.getAvailableTools() };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   });
 
   // Execute remote command (for debugging)
