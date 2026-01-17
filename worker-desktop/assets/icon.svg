@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4f8cff"/>
+      <stop offset="100%" style="stop-color:#6c5ce7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="100" fill="url(#bg)"/>
+  <g fill="white">
+    <!-- Robot head -->
+    <rect x="156" y="120" width="200" height="160" rx="30"/>
+    <!-- Eyes -->
+    <circle cx="216" cy="190" r="25" fill="#4f8cff"/>
+    <circle cx="296" cy="190" r="25" fill="#4f8cff"/>
+    <!-- Mouth -->
+    <rect x="196" y="235" width="120" height="15" rx="7" fill="#4f8cff"/>
+    <!-- Antenna -->
+    <rect x="246" y="80" width="20" height="50"/>
+    <circle cx="256" cy="70" r="20"/>
+    <!-- Body -->
+    <rect x="176" y="300" width="160" height="120" rx="20"/>
+    <!-- Arms -->
+    <rect x="116" y="310" width="50" height="80" rx="15"/>
+    <rect x="346" y="310" width="50" height="80" rx="15"/>
+    <!-- Legs -->
+    <rect x="196" y="430" width="40" height="60" rx="10"/>
+    <rect x="276" y="430" width="40" height="60" rx="10"/>
+  </g>
+</svg>

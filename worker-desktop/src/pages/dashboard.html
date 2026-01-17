@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <title>Multi-Agent Worker - Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-icon {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .btn-icon:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .container {
+      padding: 24px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .status-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .status-indicator.online { background: #00d26a; }
+    .status-indicator.busy { background: #ffc107; }
+    .status-indicator.disconnected { background: #ff5252; }
+    .status-indicator.connecting { background: #4f8cff; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .status-details {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .detail-item {
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+      border-radius: 8px;
+    }
+
+    .detail-label {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 4px;
+    }
+
+    .detail-value {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .btn-start {
+      background: linear-gradient(135deg, #00d26a 0%, #00a854 100%);
+      color: #fff;
+    }
+
+    .btn-stop {
+      background: linear-gradient(135deg, #ff5252 0%, #d32f2f 100%);
+      color: #fff;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .logs-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+
+    .logs-header {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logs-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .logs-content {
+      height: 200px;
+      overflow-y: auto;
+      padding: 12px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .log-time {
+      color: rgba(255, 255, 255, 0.4);
+      margin-right: 8px;
+    }
+
+    .log-level {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      margin-right: 8px;
+    }
+
+    .log-level.info { background: #4f8cff; }
+    .log-level.warn { background: #ffc107; color: #000; }
+    .log-level.error { background: #ff5252; }
+    .log-level.debug { background: rgba(255, 255, 255, 0.2); }
+
+    .terminal-card {
+      margin-top: 20px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .terminal-input {
+      display: flex;
+      padding: 12px;
+      gap: 8px;
+    }
+
+    .terminal-input input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.3);
+      color: #fff;
+      font-family: monospace;
+      font-size: 13px;
+    }
+
+    .terminal-input input:focus {
+      outline: none;
+      border-color: #4f8cff;
+    }
+
+    .terminal-input button {
+      padding: 10px 16px;
+      background: #4f8cff;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .terminal-output {
+      max-height: 150px;
+      overflow-y: auto;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Multi-Agent Worker</h1>
+    <div class="header-actions">
+      <button class="btn-icon" id="settingsBtn" title="Settings">Settings</button>
+      <button class="btn-icon" id="logoutBtn" title="Logout">Logout</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="status-card">
+      <div class="status-header">
+        <div class="status-indicator" id="statusIndicator"></div>
+        <span class="status-text" id="statusText">Connecting...</span>
+      </div>
+
+      <div class="status-details">
+        <div class="detail-item">
+          <div class="detail-label">Worker ID</div>
+          <div class="detail-value" id="workerId">-</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Machine</div>
+          <div class="detail-value" id="machineId">-</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Current Task</div>
+          <div class="detail-value" id="currentTask">None</div>
+        </div>
+        <div class="detail-item">
+          <div class="detail-label">Backend</div>
+          <div class="detail-value" id="backendUrl">-</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="btn btn-start" id="startBtn">Start Worker</button>
+        <button class="btn btn-stop" id="stopBtn" disabled>Stop Worker</button>
+      </div>
+    </div>
+
+    <div class="logs-card">
+      <div class="logs-header">
+        <h3>Activity Log</h3>
+        <button class="btn-icon" id="clearLogsBtn">Clear</button>
+      </div>
+      <div class="logs-content" id="logsContent">
+        <div class="log-entry">
+          <span class="log-time">--:--:--</span>
+          <span class="log-level info">INFO</span>
+          <span>Waiting for connection...</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-card">
+      <div class="terminal-header">Remote Terminal</div>
+      <div class="terminal-input">
+        <input type="text" id="commandInput" placeholder="Enter command...">
+        <button id="executeBtn">Run</button>
+      </div>
+      <div class="terminal-output" id="terminalOutput"></div>
+    </div>
+  </div>
+
+  <script>
+    let currentStatus = 'disconnected';
+
+    // Status mapping
+    const statusLabels = {
+      'disconnected': 'Disconnected',
+      'connecting': 'Connecting...',
+      'online': 'Online',
+      'busy': 'Busy (Running Task)',
+      'error': 'Error'
+    };
+
+    function updateUI(status) {
+      currentStatus = status.status || status;
+
+      const indicator = document.getElementById('statusIndicator');
+      const text = document.getElementById('statusText');
+      const startBtn = document.getElementById('startBtn');
+      const stopBtn = document.getElementById('stopBtn');
+
+      indicator.className = 'status-indicator ' + currentStatus;
+      text.textContent = statusLabels[currentStatus] || currentStatus;
+
+      if (currentStatus === 'online' || currentStatus === 'busy') {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+      } else if (currentStatus === 'connecting') {
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+      } else {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+
+      if (typeof status === 'object') {
+        if (status.workerId) {
+          document.getElementById('workerId').textContent = status.workerId.substring(0, 8) + '...';
+        }
+        if (status.machineId) {
+          document.getElementById('machineId').textContent = status.machineId.substring(0, 20) + '...';
+        }
+        document.getElementById('currentTask').textContent = status.currentTask || 'None';
+      }
+    }
+
+    function addLog(log) {
+      const logsContent = document.getElementById('logsContent');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+
+      const time = new Date(log.timestamp || Date.now()).toLocaleTimeString();
+      const level = (log.level || 'info').toLowerCase();
+
+      entry.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="log-level ${level}">${level.toUpperCase()}</span>
+        <span>${log.message || log}</span>
+      `;
+
+      logsContent.appendChild(entry);
+      logsContent.scrollTop = logsContent.scrollHeight;
+
+      // Keep only last 100 logs
+      while (logsContent.children.length > 100) {
+        logsContent.removeChild(logsContent.firstChild);
+      }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', async () => {
+      const settings = await window.workerAPI.getSettings();
+
+      if (!settings.auth || !settings.auth.token) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      document.getElementById('backendUrl').textContent = settings.backendUrl || '-';
+
+      // Get current status
+      const status = await window.workerAPI.getWorkerStatus();
+      updateUI(status);
+
+      // Listen for status updates
+      window.workerAPI.onWorkerStatus((status) => {
+        updateUI(status);
+        addLog({ level: 'info', message: `Status changed to: ${status}` });
+      });
+
+      // Listen for logs
+      window.workerAPI.onWorkerLog((log) => {
+        addLog(log);
+      });
+    });
+
+    // Start button
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      updateUI('connecting');
+      addLog({ level: 'info', message: 'Starting worker...' });
+
+      const result = await window.workerAPI.startWorker();
+      if (!result.success) {
+        addLog({ level: 'error', message: `Failed to start: ${result.error}` });
+        updateUI('error');
+      }
+    });
+
+    // Stop button
+    document.getElementById('stopBtn').addEventListener('click', async () => {
+      addLog({ level: 'info', message: 'Stopping worker...' });
+
+      const result = await window.workerAPI.stopWorker();
+      if (result.success) {
+        updateUI('disconnected');
+        addLog({ level: 'info', message: 'Worker stopped' });
+      }
+    });
+
+    // Logout button
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await window.workerAPI.logout();
+      window.location.href = 'login.html';
+    });
+
+    // Settings button
+    document.getElementById('settingsBtn').addEventListener('click', () => {
+      // TODO: Open settings dialog
+      alert('Settings coming soon!');
+    });
+
+    // Clear logs
+    document.getElementById('clearLogsBtn').addEventListener('click', () => {
+      document.getElementById('logsContent').innerHTML = '';
+      addLog({ level: 'info', message: 'Logs cleared' });
+    });
+
+    // Remote command execution
+    document.getElementById('executeBtn').addEventListener('click', executeCommand);
+    document.getElementById('commandInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') executeCommand();
+    });
+
+    async function executeCommand() {
+      const input = document.getElementById('commandInput');
+      const output = document.getElementById('terminalOutput');
+      const command = input.value.trim();
+
+      if (!command) return;
+
+      output.textContent += `$ ${command}\n`;
+
+      try {
+        const result = await window.workerAPI.executeCommand(command);
+        if (result.stdout) output.textContent += result.stdout;
+        if (result.stderr) output.textContent += result.stderr;
+        if (result.error) output.textContent += `Error: ${result.error}\n`;
+      } catch (error) {
+        output.textContent += `Error: ${error.message}\n`;
+      }
+
+      output.textContent += '\n';
+      output.scrollTop = output.scrollHeight;
+      input.value = '';
+    }
+  </script>
+</body>
+</html>

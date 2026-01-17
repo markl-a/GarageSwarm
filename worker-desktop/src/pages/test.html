@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Test</title>
+</head>
+<body>
+  <h1>Test Page</h1>
+  <button id="testBtn">Test Click</button>
+  <div id="output" style="margin-top: 20px; padding: 10px; background: #eee;"></div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    function log(msg) {
+      output.innerHTML += msg + '<br>';
+      console.log(msg);
+    }
+
+    log('Script loaded');
+    log('workerAPI: ' + (typeof window.workerAPI));
+    log('appInfo: ' + (typeof window.appInfo));
+
+    if (window.appInfo) {
+      log('Version: ' + window.appInfo.version);
+    }
+
+    document.getElementById('testBtn').addEventListener('click', async () => {
+      log('Button clicked!');
+
+      if (window.workerAPI) {
+        log('Calling getSettings...');
+        try {
+          const settings = await window.workerAPI.getSettings();
+          log('Settings: ' + JSON.stringify(settings));
+        } catch (e) {
+          log('Error: ' + e.message);
+        }
+      }
+    });
+
+    log('Event listener added');
+  </script>
+</body>
+</html>
