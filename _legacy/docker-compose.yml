@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: multi_agent_postgres
+    environment:
+      POSTGRES_DB: multi_agent_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - multi_agent_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: multi_agent_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - multi_agent_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: multi_agent_backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: dev-secret-key-at-least-32-characters-long-for-security
+      DEBUG: "true"
+      PYTHONUNBUFFERED: "1"
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8080","http://localhost:5555","http://127.0.0.1:5555","http://localhost:5000","http://localhost:5001","http://localhost:5002","http://localhost:49152","http://localhost:49153","http://localhost:49154","http://localhost:49155","http://localhost:49156","http://localhost:49157","http://localhost:49158","http://localhost:49159","http://localhost:49160"]'
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Waiting for database...' &&
+        python -c 'import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; asyncio.run(create_async_engine(\"postgresql+asyncpg://postgres:postgres_dev_password@postgres:5432/multi_agent_db\").dispose())' &&
+        echo 'Running database migrations...' &&
+        alembic upgrade head &&
+        echo 'Starting FastAPI server...' &&
+        uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    networks:
+      - multi_agent_network
+
+  # Worker agent - requires WORKER_API_KEY for authentication
+  # To enable: set WORKER_API_KEY environment variable before docker-compose up
+  worker-agent:
+    build:
+      context: ./worker-agent
+      dockerfile: Dockerfile.dev
+    container_name: multi_agent_worker
+    environment:
+      WORKER_API_KEY: ${WORKER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./worker-agent:/app
+    depends_on:
+      backend:
+        condition: service_started
+    restart: on-failure
+    networks:
+      - multi_agent_network
+    profiles:
+      - worker
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  multi_agent_network:
+    driver: bridge
