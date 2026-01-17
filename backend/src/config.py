@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "GarageSwarm"
-    APP_VERSION: str = "2.0.0"
+    APP_VERSION: str = "0.0.1"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"
 

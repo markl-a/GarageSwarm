@@ -68,7 +68,7 @@ For more information, see: README.md
     parser.add_argument(
         "--version",
         action="version",
-        version="Multi-Agent Worker v1.0.0"
+        version="GarageSwarm Worker v0.0.1"
     )
 
     args = parser.parse_args()
@@ -79,7 +79,7 @@ For more information, see: README.md
 
     logger.info(
         "Multi-Agent Worker Agent starting",
-        version="1.0.0",
+        version="0.0.1",
         config=args.config
     )
 
