@@ -1,36 +1,24 @@
 """
 Database Models Package
 
-SQLAlchemy ORM models for Multi-Agent on the Web platform.
+SQLAlchemy ORM models for Multi-Agent Platform.
 """
 
 from .base import Base, BaseModel
 from .user import User
 from .worker import Worker
-from .worker_api_key import WorkerAPIKey
+from .user_worker import UserWorker
 from .task import Task
-from .subtask import Subtask
-from .checkpoint import Checkpoint
-from .correction import Correction
-from .evaluation import Evaluation
-from .activity_log import ActivityLog
-from .proposal import Proposal, ProposalVote
-from .template import WorkflowTemplate, TemplateStep
+from .workflow import Workflow, WorkflowNode, WorkflowEdge
 
 __all__ = [
     "Base",
     "BaseModel",
     "User",
     "Worker",
-    "WorkerAPIKey",
+    "UserWorker",
     "Task",
-    "Subtask",
-    "Checkpoint",
-    "Correction",
-    "Evaluation",
-    "ActivityLog",
-    "Proposal",
-    "ProposalVote",
-    "WorkflowTemplate",
-    "TemplateStep",
+    "Workflow",
+    "WorkflowNode",
+    "WorkflowEdge",
 ]

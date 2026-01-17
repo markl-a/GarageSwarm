@@ -36,6 +36,9 @@ dependencies:
   equatable: ^2.0.5
   freezed_annotation: ^2.4.1
 
+  # Storage
+  shared_preferences: ^2.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

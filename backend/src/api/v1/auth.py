@@ -1,459 +1,224 @@
 """
-Authentication API Endpoints
+Authentication Endpoints
 
-REST API for user authentication (login, register, refresh, logout).
+User registration, login, logout, and token management.
 """
 
 from datetime import datetime
-from typing import Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from jose import JWTError
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from jose import JWTError
 
-from src.auth.dependencies import get_current_active_user, optional_auth
-from src.auth.jwt_handler import (
+from src.database import get_db
+from src.models.user import User
+from src.schemas.auth import (
+    UserRegister,
+    UserLogin,
+    TokenResponse,
+    RefreshTokenRequest,
+    ChangePasswordRequest,
+    UserResponse,
+)
+from src.auth import (
+    hash_password,
+    verify_password,
     create_access_token,
     create_refresh_token,
     verify_token_async,
     blacklist_token_async,
     TokenType,
 )
-from src.auth.password import hash_password, verify_password
-from src.database import get_db
-from src.dependencies import get_redis_service
+from src.auth.dependencies import get_current_active_user
+from src.config import settings
 from src.logging_config import get_logger
-from src.models.user import User
-from src.schemas.auth import (
-    UserRegisterRequest,
-    UserLoginRequest,
-    TokenResponse,
-    RefreshTokenRequest,
-    LogoutRequest,
-    UserResponse,
-    RegisterResponse,
-    LoginResponse,
-    LogoutResponse,
-    PasswordChangeRequest,
-    PasswordChangeResponse,
-)
-from src.services.redis_service import RedisService
 
 logger = get_logger(__name__)
-
 router = APIRouter()
 
 
-# Rate limiting configuration
-REGISTER_RATE_LIMIT = 5  # 5 registrations per window
-REGISTER_RATE_WINDOW = 3600  # 1 hour window
-LOGIN_RATE_LIMIT = 10  # 10 login attempts per window
-LOGIN_RATE_WINDOW = 300  # 5 minute window
-
-
-def get_client_ip(request: Request) -> str:
-    """Extract client IP from request, handling proxy headers"""
-    # Check X-Forwarded-For header first (for reverse proxy scenarios)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP (original client)
-        return forwarded_for.split(",")[0].strip()
-
-    # Check X-Real-IP header
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-
-    # Fall back to direct client host
-    return request.client.host if request.client else "unknown"
-
-
-@router.post(
-    "/auth/register",
-    response_model=RegisterResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register new user",
-    description="Create a new user account with username, email, and password",
-)
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
-    request: UserRegisterRequest,
-    http_request: Request,
+    data: UserRegister,
     db: AsyncSession = Depends(get_db),
-    redis_service: RedisService = Depends(get_redis_service),
 ):
     """
-    Register a new user account
-
-    Creates a new user with hashed password and returns user details.
-
-    - **username**: 3-50 characters, alphanumeric with hyphens/underscores
-    - **email**: Valid email address
-    - **password**: Minimum 8 characters
-
-    Rate limit: 5 registrations per hour per IP address
+    Register a new user account.
     """
-    # Rate limiting check
-    client_ip = get_client_ip(http_request)
-    allowed, remaining, retry_after = await redis_service.check_ip_rate_limit(
-        ip_address=client_ip,
-        endpoint="auth:register",
-        limit=REGISTER_RATE_LIMIT,
-        window=REGISTER_RATE_WINDOW
+    # Check if username exists
+    result = await db.execute(
+        select(User).where(User.username == data.username)
     )
-
-    if not allowed:
-        logger.warning(
-            "Registration rate limit exceeded",
-            ip=client_ip,
-            retry_after=retry_after
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many registration attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)}
-        )
-
-    # Check if username already exists
-    result = await db.execute(select(User).where(User.username == request.username))
     if result.scalar_one_or_none():
-        logger.warning("Registration failed: username exists", username=request.username)
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered",
         )
 
-    # Check if email already exists
-    result = await db.execute(select(User).where(User.email == request.email))
+    # Check if email exists
+    result = await db.execute(
+        select(User).where(User.email == data.email)
+    )
     if result.scalar_one_or_none():
-        logger.warning("Registration failed: email exists", email=request.email)
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",
         )
 
-    # Create new user with hashed password
+    # Create user
     user = User(
-        username=request.username,
-        email=request.email,
-        password_hash=hash_password(request.password),
+        username=data.username,
+        email=data.email,
+        password_hash=hash_password(data.password),
     )
-
-    # Add is_active if field exists
-    if hasattr(User, "is_active"):
-        user.is_active = True
 
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    logger.info(
-        "User registered successfully",
-        user_id=str(user.user_id),
-        username=user.username,
-    )
+    logger.info("User registered", user_id=str(user.user_id), username=user.username)
 
-    # Build user response
-    user_data = UserResponse.model_validate(user)
-
-    # Add is_active to response if it exists
-    if hasattr(user, "is_active"):
-        user_data.is_active = user.is_active
-    else:
-        user_data.is_active = True
-
-    return RegisterResponse(user=user_data)
+    return user
 
 
-@router.post(
-    "/auth/login",
-    response_model=LoginResponse,
-    summary="User login",
-    description="Authenticate user and return access + refresh tokens",
-)
+@router.post("/login", response_model=TokenResponse)
 async def login(
-    request: UserLoginRequest,
-    http_request: Request,
+    data: UserLogin,
     db: AsyncSession = Depends(get_db),
-    redis_service: RedisService = Depends(get_redis_service),
 ):
     """
-    Authenticate user and generate tokens
-
-    Returns access token (15 min expiry) and refresh token (7 day expiry).
-
-    - **username**: Username or email
-    - **password**: User password
-
-    Rate limit: 10 attempts per 5 minutes per IP address
+    Authenticate user and return tokens.
     """
-    # Rate limiting check
-    client_ip = get_client_ip(http_request)
-    allowed, remaining, retry_after = await redis_service.check_ip_rate_limit(
-        ip_address=client_ip,
-        endpoint="auth:login",
-        limit=LOGIN_RATE_LIMIT,
-        window=LOGIN_RATE_WINDOW
-    )
-
-    if not allowed:
-        logger.warning(
-            "Login rate limit exceeded",
-            ip=client_ip,
-            retry_after=retry_after
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)}
-        )
-
-    # Find user by username or email
+    # Find user
     result = await db.execute(
-        select(User).where(
-            (User.username == request.username) | (User.email == request.username)
-        )
+        select(User).where(User.username == data.username)
     )
     user = result.scalar_one_or_none()
 
-    if not user:
-        logger.warning("Login failed: user not found", username=request.username)
+    if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Verify password
-    if not verify_password(request.password, user.password_hash):
-        logger.warning("Login failed: invalid password", username=request.username)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Check if user is active
-    if hasattr(user, "is_active") and not user.is_active:
-        logger.warning("Login failed: inactive user", username=request.username)
+    if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
         )
 
-    # Update last login timestamp
+    # Update last login
     user.last_login = datetime.utcnow()
     await db.commit()
-    await db.refresh(user)
 
-    # Generate tokens
+    # Create tokens
     access_token = create_access_token(user.user_id, user.username)
     refresh_token = create_refresh_token(user.user_id, user.username)
 
-    logger.info("User logged in successfully", user_id=str(user.user_id), username=user.username)
+    logger.info("User logged in", user_id=str(user.user_id), username=user.username)
 
-    # Build user response
-    user_data = UserResponse.model_validate(user)
-    if hasattr(user, "is_active"):
-        user_data.is_active = user.is_active
-    else:
-        user_data.is_active = True
-
-    return LoginResponse(
-        user=user_data,
-        tokens=TokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-        ),
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 
-@router.post(
-    "/auth/refresh",
-    response_model=TokenResponse,
-    summary="Refresh access token",
-    description="Generate new access token using refresh token",
-)
+@router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
-    request: RefreshTokenRequest,
+    data: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Refresh access token
-
-    Use refresh token to generate a new access token without re-authenticating.
-    Checks Redis blacklist to ensure the refresh token hasn't been revoked.
-
-    - **refresh_token**: Valid JWT refresh token
+    Refresh access token using refresh token.
     """
     try:
-        # Verify refresh token (async with Redis blacklist check)
-        payload = await verify_token_async(request.refresh_token, expected_type=TokenType.REFRESH)
+        payload = await verify_token_async(data.refresh_token, TokenType.REFRESH)
+        user_id = UUID(payload["sub"])
+        username = payload["username"]
 
-        user_id_str = payload.get("sub")
-        username = payload.get("username")
-
-        if not user_id_str or not username:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token",
-            )
-
-        # Verify user still exists
-        from uuid import UUID
-        user_id = UUID(user_id_str)
-        result = await db.execute(select(User).where(User.user_id == user_id))
+        # Verify user still exists and is active
+        result = await db.execute(
+            select(User).where(User.user_id == user_id)
+        )
         user = result.scalar_one_or_none()
 
-        if not user:
-            logger.warning("Refresh failed: user not found", user_id=user_id_str)
+        if not user or not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
+                detail="User not found or inactive",
             )
 
-        # Check if user is active
-        if hasattr(user, "is_active") and not user.is_active:
-            logger.warning("Refresh failed: inactive user", user_id=user_id_str)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account is inactive",
-            )
-
-        # Generate new access token
+        # Create new tokens
         access_token = create_access_token(user.user_id, user.username)
+        new_refresh_token = create_refresh_token(user.user_id, user.username)
 
-        logger.info("Access token refreshed", user_id=user_id_str, username=username)
+        # Blacklist old refresh token
+        await blacklist_token_async(data.refresh_token)
+
+        logger.info("Token refreshed", user_id=str(user_id))
 
         return TokenResponse(
             access_token=access_token,
-            refresh_token=request.refresh_token,  # Return same refresh token
+            refresh_token=new_refresh_token,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
     except (JWTError, ValueError) as e:
         logger.warning("Token refresh failed", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Invalid refresh token",
         )
 
 
-@router.post(
-    "/auth/logout",
-    response_model=LogoutResponse,
-    summary="User logout",
-    description="Invalidate tokens by adding them to blacklist (stored in Redis)",
-)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    request: LogoutRequest,
-    user: User = Depends(get_current_active_user),
+    data: RefreshTokenRequest,
+    current_user: User = Depends(get_current_active_user),
 ):
     """
-    Logout user
-
-    Adds access and/or refresh tokens to Redis blacklist to invalidate them.
-    Blacklisted tokens are automatically expired after their natural TTL.
-
-    - **access_token**: Access token to blacklist (optional)
-    - **refresh_token**: Refresh token to blacklist (optional)
+    Logout user by blacklisting tokens.
     """
-    # Blacklist tokens in Redis (async)
-    if request.access_token:
-        # Access tokens expire in 15 minutes, set TTL accordingly
-        await blacklist_token_async(request.access_token, ttl_seconds=15 * 60)
-        logger.debug("Access token blacklisted in Redis", user_id=str(user.user_id))
+    try:
+        await blacklist_token_async(data.refresh_token)
+        logger.info("User logged out", user_id=str(current_user.user_id))
+    except Exception as e:
+        logger.warning("Logout error", error=str(e))
 
-    if request.refresh_token:
-        # Refresh tokens expire in 7 days, set TTL accordingly
-        await blacklist_token_async(request.refresh_token, ttl_seconds=7 * 24 * 60 * 60)
-        logger.debug("Refresh token blacklisted in Redis", user_id=str(user.user_id))
-
-    logger.info("User logged out", user_id=str(user.user_id), username=user.username)
-
-    return LogoutResponse()
+    return None
 
 
-@router.get(
-    "/auth/me",
-    response_model=UserResponse,
-    summary="Get current user",
-    description="Get current authenticated user's profile",
-)
-async def get_current_user_profile(
-    user: User = Depends(get_current_active_user),
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_active_user),
 ):
     """
-    Get current user profile
-
-    Returns profile information for the authenticated user.
+    Get current authenticated user information.
     """
-    user_data = UserResponse.model_validate(user)
-    if hasattr(user, "is_active"):
-        user_data.is_active = user.is_active
-    else:
-        user_data.is_active = True
-
-    return user_data
+    return current_user
 
 
-@router.post(
-    "/auth/change-password",
-    response_model=PasswordChangeResponse,
-    summary="Change password",
-    description="Change current user's password",
-)
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
-    request: PasswordChangeRequest,
-    user: User = Depends(get_current_active_user),
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Change user password
-
-    Requires current password for verification.
-
-    - **current_password**: Current password
-    - **new_password**: New password (minimum 8 characters)
+    Change user password.
     """
-    # Verify current password
-    if not verify_password(request.current_password, user.password_hash):
-        logger.warning("Password change failed: invalid current password", user_id=str(user.user_id))
+    if not verify_password(data.current_password, current_user.password_hash):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid current password",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
         )
 
-    # Update password
-    user.password_hash = hash_password(request.new_password)
+    current_user.password_hash = hash_password(data.new_password)
     await db.commit()
 
-    logger.info("Password changed successfully", user_id=str(user.user_id), username=user.username)
+    logger.info("Password changed", user_id=str(current_user.user_id))
 
-    return PasswordChangeResponse()
-
-
-@router.get(
-    "/auth/public",
-    summary="Public endpoint (no auth required)",
-    description="Example endpoint demonstrating optional authentication",
-)
-async def public_endpoint(
-    user: Optional[User] = Depends(optional_auth),
-):
-    """
-    Public endpoint with optional authentication
-
-    Returns different data based on whether user is authenticated.
-    """
-    if user:
-        return {
-            "message": f"Hello, {user.username}!",
-            "authenticated": True,
-            "user_id": str(user.user_id),
-        }
-    else:
-        return {
-            "message": "Hello, Guest!",
-            "authenticated": False,
-        }
+    return None

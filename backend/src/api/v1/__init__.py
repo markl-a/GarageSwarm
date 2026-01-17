@@ -1,16 +1,18 @@
 """
 API v1 Package
 
-REST API endpoints for Multi-Agent platform - Version 1
+Contains all v1 API route modules.
 """
 
-from . import health
-from . import workers
-from . import tasks
-from . import subtasks
-from . import checkpoints
-from . import evaluations
-from . import templates
-from . import auth
+from fastapi import APIRouter
 
-__all__ = ["health", "workers", "tasks", "subtasks", "checkpoints", "evaluations", "templates", "auth"]
+from . import auth, tasks, workers, workflows, health
+
+router = APIRouter()
+
+# Include all route modules
+router.include_router(health.router, tags=["Health"])
+router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
+router.include_router(workers.router, prefix="/workers", tags=["Workers"])
+router.include_router(workflows.router, prefix="/workflows", tags=["Workflows"])

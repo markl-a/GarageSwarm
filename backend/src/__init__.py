@@ -1,2 +1,7 @@
-"""Multi-Agent Backend Application"""
-__version__ = "1.0.0"
+"""
+Multi-Agent Platform Backend
+
+Cross-platform AI Agent Orchestration with DAG Workflow Engine.
+"""
+
+__version__ = "2.0.0"
