@@ -104,19 +104,19 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design.
 - [ ] Linux testing
 - [ ] End-to-end task execution flow
 
-#### AI Tools 🔄 In Progress
+#### AI Tools ✅ Core Complete
 - [x] Tool registry architecture
-- [x] Claude Code - Anthropic CLI (basic)
-- [ ] Gemini CLI - Google AI
+- [x] Tool auto-detection (startup)
+- [x] Claude Code - Anthropic CLI
+- [x] Gemini CLI - Google AI
+- [x] Ollama - Local LLM
+- [x] Aider - AI pair programming
 - [ ] Antigravity - Google AI Agent
 - [ ] OpenCode - Terminal AI Assistant
-- [ ] Ollama - Local LLM
-- [ ] Aider - AI pair programming
 - [ ] GitHub Copilot CLI
 - [ ] Amazon Q Developer
 - [ ] Cody - Sourcegraph AI
 - [ ] OpenAI API (GPT-4, o1)
-- [ ] Tool auto-detection
 - [ ] Custom tool plugins
 
 #### Frontend ⏸️ Planned

@@ -141,8 +141,8 @@ class WorkerService {
     // CLI-based tools
     return new Promise((resolve) => {
       const proc = spawn(toolConfig.command, toolConfig.checkArgs, {
-        shell: true,
-        timeout: 5000
+        shell: process.platform === 'win32',  // Only use shell on Windows
+        windowsHide: true
       });
 
       let output = '';

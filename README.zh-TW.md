@@ -104,19 +104,19 @@ docker-compose up -d
 - [ ] Linux 測試
 - [ ] 端到端任務執行流程
 
-#### AI 工具 🔄 進行中
+#### AI 工具 ✅ 核心完成
 - [x] 工具註冊架構
-- [x] Claude Code - Anthropic CLI（基礎）
-- [ ] Gemini CLI - Google AI
+- [x] 工具自動偵測（啟動時）
+- [x] Claude Code - Anthropic CLI
+- [x] Gemini CLI - Google AI
+- [x] Ollama - 本地 LLM
+- [x] Aider - AI 結對編程
 - [ ] Antigravity - Google AI Agent
 - [ ] OpenCode - 終端 AI 助手
-- [ ] Ollama - 本地 LLM
-- [ ] Aider - AI 結對編程
 - [ ] GitHub Copilot CLI
 - [ ] Amazon Q Developer
 - [ ] Cody - Sourcegraph AI
 - [ ] OpenAI API (GPT-4, o1)
-- [ ] 工具自動偵測
 - [ ] 自訂工具插件
 
 #### 前端 ⏸️ 計劃中
