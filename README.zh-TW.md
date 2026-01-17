@@ -31,7 +31,8 @@ GarageSwarm 是一個跨平台的多 AI Agent 協作平台。不需要昂貴的�
 ## 特色
 
 - **多平台 Worker**：桌面版 (Electron)、Docker 版 (Python)、手機版 (Flutter)
-- **多 AI 工具支援**：Claude Code、Gemini CLI、Ollama 等
+- **多 AI 工具支援**：Claude Code、Gemini CLI、Ollama、Aider、GitHub Copilot、Amazon Q、OpenAI API 等
+- **可擴展工具系統**：插件架構支援自訂 AI 工具整合
 - **DAG 工作流**：複雜任務依賴與並行執行
 - **用戶認證**：JWT 認證與用戶-Worker 綁定
 - **即時更新**：WebSocket 即時狀態與任務推送
@@ -105,10 +106,16 @@ docker-compose up -d
 
 #### AI 工具 🔄 進行中
 - [x] 工具註冊架構
-- [x] Claude Code（基礎）
-- [ ] Gemini CLI 整合
-- [ ] Ollama 整合
+- [x] Claude Code - Anthropic CLI（基礎）
+- [ ] Gemini CLI - Google AI
+- [ ] Ollama - 本地 LLM
+- [ ] Aider - AI 結對編程
+- [ ] GitHub Copilot CLI
+- [ ] Amazon Q Developer
+- [ ] Cody - Sourcegraph AI
+- [ ] OpenAI API (GPT-4, o1)
 - [ ] 工具自動偵測
+- [ ] 自訂工具插件
 
 #### 前端 ⏸️ 計劃中
 - [ ] Flutter Web 控制台

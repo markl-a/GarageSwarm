@@ -31,7 +31,8 @@ Coordinate multiple AI CLI tools (Claude Code, Gemini CLI, Ollama) across distri
 ## Features
 
 - **Multi-platform Workers**: Desktop (Electron), Docker (Python), Mobile (Flutter)
-- **Multiple AI Tools**: Claude Code, Gemini CLI, Ollama, and more
+- **Multiple AI Tools**: Claude Code, Gemini CLI, Ollama, Aider, GitHub Copilot, Amazon Q, OpenAI API, and more
+- **Extensible Tool System**: Plugin architecture for custom AI tool integration
 - **DAG Workflows**: Complex task dependencies with parallel execution
 - **User Authentication**: JWT-based auth with user-worker binding
 - **Real-time Updates**: WebSocket for live status and task push
@@ -105,10 +106,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design.
 
 #### AI Tools 🔄 In Progress
 - [x] Tool registry architecture
-- [x] Claude Code (basic)
-- [ ] Gemini CLI integration
-- [ ] Ollama integration
+- [x] Claude Code - Anthropic CLI (basic)
+- [ ] Gemini CLI - Google AI
+- [ ] Ollama - Local LLM
+- [ ] Aider - AI pair programming
+- [ ] GitHub Copilot CLI
+- [ ] Amazon Q Developer
+- [ ] Cody - Sourcegraph AI
+- [ ] OpenAI API (GPT-4, o1)
 - [ ] Tool auto-detection
+- [ ] Custom tool plugins
 
 #### Frontend ⏸️ Planned
 - [ ] Flutter Web Dashboard
