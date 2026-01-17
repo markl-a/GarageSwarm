@@ -103,116 +103,80 @@ A cross-platform (Windows, macOS, Linux, Android, iOS) multi-AI agent collaborat
 ## Directory Structure
 
 ```
-bmad-test/
-├── backend/                        # FastAPI Backend
+GarageSwarm/
+├── backend/                        # FastAPI Backend (v0.0.1)
 │   ├── src/
-│   │   ├── api/
-│   │   │   └── v1/
-│   │   │       ├── auth.py         # Auth endpoints
-│   │   │       ├── users.py        # User management
-│   │   │       ├── tasks.py        # Task CRUD
-│   │   │       ├── workers.py      # Worker management
-│   │   │       ├── workflows.py    # Workflow management
-│   │   │       ├── websocket.py    # WebSocket endpoints
-│   │   │       └── health.py       # Health checks
+│   │   ├── api/v1/                # API endpoints
+│   │   │   ├── auth.py            # Auth endpoints
+│   │   │   ├── health.py          # Health checks
+│   │   │   ├── tasks.py           # Task CRUD
+│   │   │   ├── workers.py         # Worker management
+│   │   │   └── websocket.py       # WebSocket endpoints
 │   │   ├── auth/
-│   │   │   ├── __init__.py
-│   │   │   ├── jwt_handler.py      # JWT creation/verification
-│   │   │   ├── password.py         # Password hashing
-│   │   │   └── dependencies.py     # Auth dependencies
+│   │   │   ├── jwt_handler.py     # JWT creation/verification
+│   │   │   ├── password.py        # Password hashing
+│   │   │   └── dependencies.py    # Auth dependencies
 │   │   ├── models/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py             # SQLAlchemy base
-│   │   │   ├── user.py             # User model
-│   │   │   ├── worker.py           # Worker model
-│   │   │   ├── user_worker.py      # User-Worker relationship
-│   │   │   ├── task.py             # Task model
-│   │   │   └── workflow.py         # Workflow, Node, Edge models
-│   │   ├── schemas/
-│   │   │   ├── __init__.py
-│   │   │   ├── auth.py             # Auth request/response
-│   │   │   ├── user.py             # User schemas
-│   │   │   ├── task.py             # Task schemas
-│   │   │   ├── worker.py           # Worker schemas
-│   │   │   └── workflow.py         # Workflow schemas
+│   │   │   ├── user.py            # User model
+│   │   │   ├── worker.py          # Worker model
+│   │   │   └── task.py            # Task model
+│   │   ├── schemas/               # Pydantic schemas
 │   │   ├── services/
-│   │   │   ├── __init__.py
-│   │   │   ├── auth_service.py     # Authentication logic
-│   │   │   ├── user_service.py     # User management
-│   │   │   ├── task_service.py     # Task operations
-│   │   │   ├── worker_service.py   # Worker management
-│   │   │   └── redis_service.py    # Redis operations
-│   │   ├── workflow/
-│   │   │   ├── __init__.py
-│   │   │   ├── executor.py         # Workflow execution engine
-│   │   │   ├── dag.py              # DAG utilities
-│   │   │   ├── scheduler.py        # Task scheduling
-│   │   │   └── allocator.py        # Task allocation
-│   │   ├── middleware/
-│   │   │   ├── __init__.py
-│   │   │   ├── error_handler.py    # Global error handling
-│   │   │   ├── request_id.py       # Request ID tracking
-│   │   │   └── cors.py             # CORS configuration
-│   │   ├── config.py               # Application settings
-│   │   ├── database.py             # Database connection
-│   │   ├── logging_config.py       # Logging setup
-│   │   └── main.py                 # FastAPI application
-│   ├── alembic/
-│   │   └── versions/               # Database migrations
-│   ├── tests/
-│   │   ├── unit/
-│   │   ├── integration/
-│   │   └── e2e/
+│   │   │   ├── auth_service.py    # Authentication logic
+│   │   │   ├── task_service.py    # Task operations
+│   │   │   ├── worker_service.py  # Worker management
+│   │   │   └── redis_service.py   # Redis operations
+│   │   ├── middleware/            # Middleware (error, cors, etc.)
+│   │   ├── config.py              # Application settings
+│   │   ├── database.py            # Database connection
+│   │   └── main.py                # FastAPI application
+│   ├── alembic/                   # Database migrations
+│   ├── tests/                     # Unit/Integration tests
 │   ├── requirements.txt
-│   ├── pyproject.toml
 │   ├── Dockerfile
 │   └── .env.example
 │
-├── frontend/                       # Flutter Web Dashboard
-│   ├── lib/
-│   │   ├── config/                 # App configuration
-│   │   ├── models/                 # Data models
-│   │   ├── providers/              # Riverpod state
-│   │   ├── services/               # API services
-│   │   ├── screens/
-│   │   │   ├── auth/               # Login/Register
-│   │   │   ├── dashboard/          # Overview
-│   │   │   ├── tasks/              # Task management
-│   │   │   ├── workflows/          # Workflow editor
-│   │   │   ├── workers/            # Worker management
-│   │   │   └── settings/           # Settings
-│   │   ├── widgets/                # Reusable components
-│   │   ├── router/                 # Navigation
-│   │   └── main.dart
-│   ├── pubspec.yaml
-│   └── web/
+├── frontend/                       # Flutter Web Dashboard (Planned)
+│   └── (To be implemented)
 │
-├── worker-agent/                   # Python Worker Agent
+├── worker-desktop/                 # Electron Desktop Worker (v0.0.1)
+│   ├── src/
+│   │   ├── main.js                # Electron main process
+│   │   ├── preload.js             # Preload script (IPC bridge)
+│   │   ├── pages/
+│   │   │   ├── login.html         # API key login page
+│   │   │   └── dashboard.html     # Worker dashboard
+│   │   ├── js/
+│   │   │   ├── login.js           # Login logic
+│   │   │   └── dashboard.js       # Dashboard logic
+│   │   └── css/
+│   │       └── style.css          # Shared styles
+│   ├── assets/                    # App icons
+│   ├── package.json
+│   └── electron-builder.yml       # Build config
+│
+├── worker-agent/                   # Python Docker Worker (v0.0.1)
 │   ├── src/
 │   │   ├── agent/
-│   │   │   ├── core.py             # Main agent class
-│   │   │   ├── connection.py       # HTTP/WebSocket
-│   │   │   ├── executor.py         # Task execution
-│   │   │   └── monitor.py          # Resource monitoring
+│   │   │   ├── core.py            # Main agent class
+│   │   │   ├── connection.py      # HTTP/WebSocket
+│   │   │   ├── executor.py        # Task execution
+│   │   │   └── monitor.py         # Resource monitoring
 │   │   ├── tools/
-│   │   │   ├── base.py             # Tool interface
-│   │   │   ├── claude_code.py      # Claude Code CLI
-│   │   │   ├── gemini_cli.py       # Gemini CLI
-│   │   │   └── ollama.py           # Ollama local LLM
-│   │   ├── config.py
-│   │   ├── exceptions.py
+│   │   │   ├── base.py            # Tool interface
+│   │   │   ├── claude_code.py     # Claude Code CLI
+│   │   │   ├── gemini_cli.py      # Gemini CLI
+│   │   │   └── ollama.py          # Ollama local LLM
 │   │   └── main.py
-│   ├── config/
-│   │   └── agent.yaml
-│   └── requirements.txt
+│   ├── config/agent.yaml
+│   ├── requirements.txt
+│   └── Dockerfile.dev
 │
-├── docker/
-│   ├── prometheus/                 # Monitoring
-│   └── init-db.sh
-│
-├── docker-compose.yml
+├── docker-compose.yml              # Backend + DB services
 ├── ARCHITECTURE.md                 # This file
-└── README.md
+├── CLAUDE.md                       # Claude Code context
+├── README.md                       # English README
+└── README.zh-TW.md                 # Chinese README
 ```
 
 ---
@@ -446,9 +410,9 @@ bmad-test/
 | **ORM** | SQLAlchemy | 2.0+ |
 | **Validation** | Pydantic | 2.5+ |
 | **Auth** | python-jose | 3.3+ |
-| **Frontend** | Flutter Web | 3.16+ |
-| **State Mgmt** | Riverpod | 2.4+ |
-| **Worker** | Python | 3.11+ |
+| **Frontend** | Flutter Web | 3.16+ (Planned) |
+| **Desktop Worker** | Electron | 28+ |
+| **Docker Worker** | Python | 3.11+ |
 | **AI Tools** | Claude Code, Gemini CLI, Ollama | - |
 | **Container** | Docker | 24+ |
 | **Monitoring** | Prometheus + Grafana | - |
@@ -457,31 +421,35 @@ bmad-test/
 
 ## Implementation Phases
 
-### Phase 1: MVP (Current)
+### Phase 1: MVP (Current - v0.0.1)
 - [x] Backend directory structure
-- [x] Database models (User, Worker, Task, Workflow)
+- [x] Database models (User, Worker, Task)
 - [x] Auth module (JWT, Password hashing)
-- [ ] Auth API endpoints
-- [ ] Task CRUD API
-- [ ] Worker registration API
-- [ ] WebSocket connection
-- [ ] Frontend login/register
+- [x] Auth API endpoints (login, register, refresh)
+- [x] Task CRUD API
+- [x] Worker registration API
+- [x] WebSocket connection
+- [x] Electron Desktop Worker (Windows/Mac/Linux)
+- [x] Python Docker Worker
+- [x] Claude Code tool integration
+- [ ] Frontend login/register (Flutter Web - Planned)
 
 ### Phase 2: Workflow Engine
-- [ ] Workflow execution engine
+- [ ] Workflow data models
 - [ ] DAG executor
 - [ ] Sequential/Concurrent modes
-- [ ] Workflow API
+- [ ] Workflow API endpoints
 - [ ] Frontend workflow editor
 
 ### Phase 3: Multi-Tool Support
-- [ ] Tool registry
+- [x] Tool registry (base architecture)
+- [x] Claude Code integration
 - [ ] Gemini CLI integration
 - [ ] Ollama integration
 - [ ] Tool health checks
 
 ### Phase 4: Mobile Workers
-- [ ] Flutter Worker App
+- [ ] Flutter Worker App (Android/iOS)
 - [ ] API-based tools
 - [ ] Background service
 - [ ] Battery optimization
@@ -491,3 +459,4 @@ bmad-test/
 - [ ] Monitoring/Alerting
 - [ ] Audit logs
 - [ ] Auto-scaling
+- [ ] Performance optimization
