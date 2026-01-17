@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Documentation
-    url: https://github.com/your-org/multi-agent-web/tree/main/docs
-    about: Please check the documentation before opening an issue
-  - name: Discussions
-    url: https://github.com/your-org/multi-agent-web/discussions
-    about: Ask questions and discuss ideas
