@@ -82,24 +82,45 @@ docker-compose up -d
 
 ## Development Status
 
-This project is currently being rebuilt with a simplified architecture. See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed design.
+**Current Version: v0.0.1**
 
-### Phase 1 (Current)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design.
+
+### Phase 1: MVP (Current)
+
+#### Backend ✅
 - [x] User authentication (JWT)
 - [x] Basic Task/Worker CRUD
 - [x] Worker registration and heartbeat
 - [x] WebSocket connection
-- [x] Desktop worker (Electron)
-- [x] Docker worker
 
-### Phase 2 (Planned)
-- [ ] DAG workflow engine
-- [ ] Web dashboard (Flutter)
-- [ ] Workflow editor
+#### Desktop Worker 🔄 In Progress
+- [x] Electron app structure
+- [x] Login page (API Key auth)
+- [x] Dashboard UI
+- [x] Windows testing
+- [ ] Mac testing
+- [ ] Linux testing
+- [ ] End-to-end task execution flow
 
-### Phase 3 (Planned)
-- [ ] Multi-tool support
-- [ ] Mobile worker
+#### AI Tools 🔄 In Progress
+- [x] Tool registry architecture
+- [x] Claude Code (basic)
+- [ ] Gemini CLI integration
+- [ ] Ollama integration
+- [ ] Tool auto-detection
+
+#### Frontend ⏸️ Planned
+- [ ] Flutter Web Dashboard
+
+### Phase 2: Workflow Engine
+- [ ] Workflow data models
+- [ ] DAG executor
+- [ ] Workflow editor UI
+
+### Phase 3: Mobile Workers
+- [ ] Flutter app (Android/iOS)
+- [ ] API-based AI tools
 
 ## License
 
