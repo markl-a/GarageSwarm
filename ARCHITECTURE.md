@@ -1,8 +1,8 @@
-# Multi-Agent Platform Architecture
+# GarageSwarm Architecture
 
 ## Overview
 
-A cross-platform (Windows, macOS, Linux, Android, iOS) multi-AI agent collaboration platform.
+A cross-platform (Windows, macOS, Linux, Android, iOS) multi-AI agent collaboration platform. Run your own AI swarm on garage-tier hardware.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

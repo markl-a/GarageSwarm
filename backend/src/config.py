@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Application
-    APP_NAME: str = "Multi-Agent Platform"
+    APP_NAME: str = "GarageSwarm"
     APP_VERSION: str = "2.0.0"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"

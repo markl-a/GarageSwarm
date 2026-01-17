@@ -1,10 +1,10 @@
-# Multi-Agent Platform
+# GarageSwarm
 
-A cross-platform multi-AI agent collaboration platform supporting Windows, macOS, Linux, Android, and iOS.
+A cross-platform multi-AI agent collaboration platform. Run your own AI swarm on whatever machines you have lying around - old laptops, desktop PCs, even that dusty server in the corner.
 
 ## Overview
 
-Coordinate multiple AI CLI tools (Claude Code, Gemini CLI, Ollama) across distributed workers with a centralized control panel.
+Coordinate multiple AI CLI tools (Claude Code, Gemini CLI, Ollama) across distributed workers with a centralized control panel. No fancy infrastructure needed - just your garage-tier hardware.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

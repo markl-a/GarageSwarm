@@ -111,7 +111,8 @@
       "Bash(start /wait \"\" npx electron .)",
       "Bash(start \"\" \"node_modules\\\\.bin\\\\electron.cmd\" .)",
       "Bash(git status:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

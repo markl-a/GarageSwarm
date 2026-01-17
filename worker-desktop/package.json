@@ -1,7 +1,7 @@
 {
-  "name": "multi-agent-worker",
+  "name": "garageswarm-worker",
   "version": "1.0.0",
-  "description": "Multi-Agent Worker Desktop Application",
+  "description": "GarageSwarm Worker Desktop Application",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -11,7 +11,7 @@
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux"
   },
-  "author": "Multi-Agent Platform",
+  "author": "GarageSwarm",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.0",
@@ -25,8 +25,8 @@
     "electron-builder": "^24.9.0"
   },
   "build": {
-    "appId": "com.multiagent.worker",
-    "productName": "Multi-Agent Worker",
+    "appId": "com.garageswarm.worker",
+    "productName": "GarageSwarm Worker",
     "directories": {
       "output": "dist"
     },

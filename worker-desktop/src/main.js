@@ -1,5 +1,5 @@
 /**
- * Multi-Agent Worker - Electron Main Process
+ * GarageSwarm Worker - Electron Main Process
  */
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell } = require('electron');
@@ -129,7 +129,7 @@ function createTray() {
 
   updateTrayMenu('disconnected');
 
-  tray.setToolTip('Multi-Agent Worker');
+  tray.setToolTip('GarageSwarm Worker');
 
   tray.on('click', () => {
     if (mainWindow) {
