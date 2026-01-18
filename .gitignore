@@ -224,3 +224,4 @@ test_*.json
 .claude/settings.local.json
 _legacy/
 .claude/
+SESSION_PROGRESS.md
