@@ -40,6 +40,8 @@ GarageSwarm 是一個跨平台的多 AI Agent 協作平台。不需要昂貴的�
 
 ## 應用場景
 
+> ⚠️ **Under Development** - The following use cases are planned features, still in development and require validation and testing.
+>
 > ⚠️ **開發中** - 以下應用場景為規劃中的功能，目前仍在開發階段，尚需驗證與測試。
 
 GarageSwarm 可以用來處理各種需要多 AI 協作的任務：
