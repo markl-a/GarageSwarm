@@ -102,7 +102,7 @@ docker-compose up -d
 - [x] Windows 測試
 - [ ] Mac 測試
 - [ ] Linux 測試
-- [ ] 端到端任務執行流程
+- [x] 端到端任務執行流程
 
 #### AI 工具 ✅ 核心完成
 - [x] 工具註冊架構
@@ -110,7 +110,7 @@ docker-compose up -d
 - [x] Claude Code - Anthropic CLI
 - [x] Gemini CLI - Google AI
 - [x] Ollama - 本地 LLM
-- [x] Aider - AI 結對編程
+- [ ] Aider - AI 結對編程
 - [ ] Antigravity - Google AI Agent
 - [ ] OpenCode - 終端 AI 助手
 - [ ] GitHub Copilot CLI

@@ -102,12 +102,24 @@ cd worker-agent
 docker-compose up -d
 ```
 
+## MCP Integration
+
+Gemini MCP server is configured for Claude Code integration:
+- Location: `~/mcp-servers/gemini-mcp/`
+- Config: `.claude/mcp.json`
+
+Available MCP tools:
+- `gemini_quick_query` - Quick questions
+- `gemini_analyze_code` - Code analysis
+- `gemini_codebase_analysis` - Full project analysis (1M token context)
+
 ## Current Version
 
 `0.0.1` - Early development stage
 
 ## Notes
 
-- Default backend URL: `http://127.0.0.1:8000`
+- Default backend URL: `http://127.0.0.1:8000` (or 8080 if 8000 is occupied)
 - WebSocket endpoint: `/api/v1/workers/{worker_id}/ws`
 - Worker heartbeat interval: 30 seconds
+- See `SESSION_PROGRESS.md` for latest development status
