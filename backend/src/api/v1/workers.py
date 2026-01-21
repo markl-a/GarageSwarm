@@ -25,6 +25,8 @@ from src.schemas.worker import (
     WorkerTaskAssignment,
     TaskCompleteRequest,
     TaskFailedRequest,
+    TaskResultReport,
+    TaskResultResponse,
 )
 from src.auth.dependencies import get_current_active_user, get_optional_user
 from src.logging_config import get_logger
@@ -379,3 +381,101 @@ async def fail_task(
     )
 
     return {"status": "success"}
+
+
+@router.post("/{worker_id}/report-result", response_model=TaskResultResponse)
+async def report_task_result(
+    worker_id: UUID,
+    data: TaskResultReport,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Report task result from worker with execution metrics.
+
+    This is a unified endpoint for reporting task completion, failure, or cancellation.
+    It provides more detailed metrics than the separate task-complete/task-failed endpoints.
+    """
+    # Verify worker exists
+    result_worker = await db.execute(
+        select(Worker).where(Worker.worker_id == worker_id)
+    )
+    worker = result_worker.scalar_one_or_none()
+
+    if not worker:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Worker not found",
+        )
+
+    # Find task and validate it belongs to this worker
+    result_task = await db.execute(
+        select(Task).where(Task.task_id == data.task_id)
+    )
+    task = result_task.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    # Validate task belongs to this worker
+    if task.worker_id != worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Task is not assigned to this worker",
+        )
+
+    # Validate task is in a state that can be updated
+    if task.status in ("completed", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Task is already in terminal state: {task.status}",
+        )
+
+    # Update task status
+    task.status = data.status
+    task.completed_at = datetime.utcnow()
+    task.version += 1
+
+    # Set result or error based on status
+    if data.status == "completed":
+        task.result = data.result or {}
+        task.progress = 100
+        message = "Task completed successfully"
+    elif data.status == "failed":
+        task.error = data.error
+        task.result = data.result  # May contain partial results
+        message = f"Task failed: {data.error}" if data.error else "Task failed"
+    else:  # cancelled
+        task.error = data.error or "Task was cancelled"
+        message = "Task was cancelled"
+
+    # Store execution metrics in task metadata
+    if task.task_metadata is None:
+        task.task_metadata = {}
+
+    task.task_metadata["execution_time_ms"] = data.execution_time_ms
+    if data.metrics:
+        task.task_metadata["metrics"] = data.metrics
+
+    # Set worker back to idle
+    worker.status = "idle"
+
+    await db.commit()
+
+    logger.info(
+        "Task result reported",
+        task_id=str(data.task_id),
+        worker_id=str(worker_id),
+        status=data.status,
+        execution_time_ms=data.execution_time_ms,
+        metrics=data.metrics,
+    )
+
+    return TaskResultResponse(
+        status="success",
+        task_id=data.task_id,
+        task_status=data.status,
+        message=message,
+    )

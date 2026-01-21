@@ -6,7 +6,7 @@ Worker Agent registration, status tracking, and resource monitoring.
 
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, Float, String, TIMESTAMP, func
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, String, TIMESTAMP, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -24,6 +24,14 @@ class Worker(Base):
         default=uuid4,
         server_default=func.gen_random_uuid(),
         comment="Unique worker identifier",
+    )
+
+    api_key = Column(
+        String(64),
+        unique=True,
+        nullable=True,
+        index=True,
+        comment="Worker API key for authentication",
     )
 
     machine_id = Column(
@@ -58,6 +66,14 @@ class Worker(Base):
         nullable=False,
         default=list,
         comment='Available AI tools: ["claude_code", "gemini_cli", "ollama"]',
+    )
+
+    is_active = Column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+        comment="Whether worker is active (can receive tasks)",
     )
 
     # Resource usage

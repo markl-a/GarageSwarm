@@ -1,21 +1,45 @@
 """Task execution management"""
 
 import asyncio
+import time
 from typing import Any, Callable, Dict, Optional
 from uuid import UUID
 
 import structlog
 
 from tools.base import BaseTool
+from .result_reporter import ResultReporter
 
 logger = structlog.get_logger()
 
 
 class TaskExecutor:
-    """Execute tasks using registered AI tools"""
+    """Execute tasks using registered AI tools
 
-    def __init__(self):
-        """Initialize task executor"""
+    The TaskExecutor handles task execution with optional automatic result
+    reporting via the ResultReporter integration.
+
+    Attributes:
+        tools: Dictionary of registered AI tools
+        current_task: UUID of currently executing task
+        is_busy: Whether executor is currently executing a task
+        is_cancelled: Whether current task has been cancelled
+        result_reporter: Optional ResultReporter for automatic result submission
+        worker_id: Worker ID for result reporting (required if result_reporter is set)
+    """
+
+    def __init__(
+        self,
+        result_reporter: Optional[ResultReporter] = None,
+        worker_id: Optional[str] = None
+    ):
+        """Initialize task executor
+
+        Args:
+            result_reporter: Optional ResultReporter instance for automatic
+                result submission to backend
+            worker_id: Worker ID (required if result_reporter is provided)
+        """
         self.tools: Dict[str, BaseTool] = {}
         self.current_task: Optional[UUID] = None
         self.is_busy = False
@@ -23,6 +47,15 @@ class TaskExecutor:
         self._cancel_event = asyncio.Event()
         self._execution_task: Optional[asyncio.Task] = None
         self.log_callback: Optional[Callable[[str, str], None]] = None
+
+        # Result reporting integration
+        self.result_reporter: Optional[ResultReporter] = result_reporter
+        self.worker_id: Optional[str] = worker_id
+
+        if result_reporter and not worker_id:
+            logger.warning(
+                "ResultReporter provided without worker_id - automatic result reporting disabled"
+            )
 
     def register_tool(self, name: str, tool: BaseTool):
         """Register an AI tool
@@ -70,6 +103,66 @@ class TaskExecutor:
             callback: Async function that takes (log_line, log_level) as parameters
         """
         self.log_callback = callback
+
+    def set_result_reporter(
+        self,
+        result_reporter: ResultReporter,
+        worker_id: str
+    ):
+        """Set or update the result reporter for automatic result submission
+
+        Args:
+            result_reporter: ResultReporter instance
+            worker_id: Worker ID for result reporting
+        """
+        self.result_reporter = result_reporter
+        self.worker_id = worker_id
+        logger.info("ResultReporter configured for TaskExecutor", worker_id=worker_id)
+
+    def clear_result_reporter(self):
+        """Clear the result reporter (disable automatic result submission)"""
+        self.result_reporter = None
+        self.worker_id = None
+        logger.info("ResultReporter cleared from TaskExecutor")
+
+    async def _report_result(
+        self,
+        subtask_id: str,
+        result: dict,
+        execution_time_ms: int = 0
+    ) -> bool:
+        """Internal method to report result via ResultReporter if configured
+
+        Args:
+            subtask_id: Task/subtask ID
+            result: Execution result dictionary
+            execution_time_ms: Execution time in milliseconds
+
+        Returns:
+            True if reported successfully or reporter not configured, False on error
+        """
+        if not self.result_reporter or not self.worker_id:
+            return True  # No reporter configured, consider it success
+
+        try:
+            status = "completed" if result.get("success") else "failed"
+            await self.result_reporter.report_result(
+                worker_id=self.worker_id,
+                task_id=subtask_id,
+                status=status,
+                result=result,
+                error=result.get("error"),
+                execution_time_ms=execution_time_ms,
+                metadata=result.get("metadata")
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Failed to report result via ResultReporter",
+                subtask_id=subtask_id,
+                error=str(e)
+            )
+            return False
 
     async def _log(self, message: str, level: str = "info"):
         """Internal logging method that streams to backend if callback is set
@@ -252,6 +345,97 @@ class TaskExecutor:
                 "metadata": {"timeout": timeout}
             }
 
+    async def execute_task_and_report(
+        self,
+        subtask: dict,
+        timeout: int = 3600,
+        auto_report: bool = True
+    ) -> dict:
+        """Execute task and automatically report result to backend
+
+        This is a convenience method that combines task execution with
+        automatic result reporting via the configured ResultReporter.
+
+        Args:
+            subtask: Subtask dictionary containing:
+                - subtask_id: UUID of subtask
+                - description: Task description
+                - assigned_tool: Name of tool to use
+                - context: Optional context data
+            timeout: Timeout in seconds (default 3600 = 1 hour)
+            auto_report: Whether to automatically report result (default True)
+
+        Returns:
+            Result dictionary containing:
+                - success: bool
+                - output: Any - Task output
+                - error: Optional[str] - Error message if failed
+                - metadata: dict - Execution metadata
+                - reported: bool - Whether result was reported to backend
+                - execution_time_ms: int - Execution time in milliseconds
+        """
+        subtask_id = subtask.get("subtask_id")
+        start_time = time.time()
+
+        try:
+            # Execute task with timeout
+            result = await self.execute_task_with_timeout(subtask, timeout)
+
+            # Calculate execution time
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            result["execution_time_ms"] = execution_time_ms
+
+            # Report result if auto_report is enabled
+            reported = False
+            if auto_report and subtask_id:
+                reported = await self._report_result(
+                    subtask_id=str(subtask_id),
+                    result=result,
+                    execution_time_ms=execution_time_ms
+                )
+
+            result["reported"] = reported
+
+            logger.info(
+                "Task execution and reporting complete",
+                subtask_id=str(subtask_id) if subtask_id else None,
+                success=result.get("success"),
+                reported=reported,
+                execution_time_ms=execution_time_ms
+            )
+
+            return result
+
+        except Exception as e:
+            # Calculate execution time even on failure
+            execution_time_ms = int((time.time() - start_time) * 1000)
+
+            error_result = {
+                "success": False,
+                "output": None,
+                "error": f"Execution error: {str(e)}",
+                "metadata": {"exception_type": type(e).__name__},
+                "execution_time_ms": execution_time_ms,
+                "reported": False
+            }
+
+            # Try to report the error
+            if auto_report and subtask_id:
+                error_result["reported"] = await self._report_result(
+                    subtask_id=str(subtask_id),
+                    result=error_result,
+                    execution_time_ms=execution_time_ms
+                )
+
+            logger.error(
+                "Task execution failed",
+                subtask_id=str(subtask_id) if subtask_id else None,
+                error=str(e),
+                execution_time_ms=execution_time_ms
+            )
+
+            return error_result
+
     def get_status(self) -> dict:
         """Get executor status
 
@@ -263,7 +447,9 @@ class TaskExecutor:
             "current_task": str(self.current_task) if self.current_task else None,
             "available_tools": list(self.tools.keys()),
             "tool_count": len(self.tools),
-            "is_cancelled": self.is_cancelled
+            "is_cancelled": self.is_cancelled,
+            "result_reporter_configured": self.result_reporter is not None,
+            "worker_id": self.worker_id
         }
 
     async def cancel_current_task(self) -> bool:

@@ -5,7 +5,7 @@ Request and response models for worker endpoints.
 """
 
 from datetime import datetime
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -81,3 +81,25 @@ class TaskFailedRequest(BaseModel):
 
     task_id: UUID
     error: str
+
+
+class TaskResultReport(BaseModel):
+    """Task result report from worker - unified completion/failure reporting."""
+
+    task_id: UUID
+    status: Literal["completed", "failed", "cancelled"]
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    execution_time_ms: int = Field(..., ge=0, description="Execution time in milliseconds")
+    metrics: Optional[Dict[str, int]] = Field(
+        None, description="Execution metrics (e.g., tokens_used, api_calls)"
+    )
+
+
+class TaskResultResponse(BaseModel):
+    """Response for task result reporting."""
+
+    status: str = "success"
+    task_id: UUID
+    task_status: str
+    message: str
