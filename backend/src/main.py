@@ -14,6 +14,7 @@ from src.config import settings
 from src.database import init_db, close_db
 from src.logging_config import setup_logging, get_logger
 from src.api.v1 import router as api_v1_router
+from src.mcp import get_mcp_bus
 
 # Setup logging
 setup_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
@@ -32,12 +33,23 @@ async def lifespan(app: FastAPI):
     )
 
     await init_db()
+
+    # Initialize MCP Bus
+    mcp_bus = get_mcp_bus()
+    await mcp_bus.start()
+    logger.info("MCP Bus started")
+
     logger.info("Application started successfully")
 
     yield
 
     # Shutdown
     logger.info("Shutting down application")
+
+    # Stop MCP Bus
+    await mcp_bus.stop()
+    logger.info("MCP Bus stopped")
+
     await close_db()
     logger.info("Application shutdown complete")
 
