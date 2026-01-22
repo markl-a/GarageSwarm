@@ -1,0 +1,470 @@
+# Automated Code Review Workflow Template
+# Uses multiple AI agents for comprehensive code analysis
+
+id: code_review
+name: Automated Code Review
+description: |
+  Multi-agent code review workflow that performs style checking,
+  security scanning, and logic analysis using different AI tools.
+  Aggregates results and requires human approval before finalizing.
+version: "1.0"
+
+# Input schema defines required and optional parameters
+input_schema:
+  type: object
+  properties:
+    code_path:
+      type: string
+      description: Path to the code file or directory to review
+    pr_number:
+      type: integer
+      description: Pull request number (optional, for PR context)
+    repository_url:
+      type: string
+      description: Repository URL for additional context
+    review_focus:
+      type: array
+      items:
+        type: string
+      description: Specific areas to focus on (e.g., ["security", "performance"])
+    severity_threshold:
+      type: string
+      enum: ["info", "warning", "error", "critical"]
+      default: "warning"
+      description: Minimum severity level to report
+  required:
+    - code_path
+
+# Output schema defines the structure of the final result
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: object
+      properties:
+        total_issues: { type: integer }
+        critical_count: { type: integer }
+        warning_count: { type: integer }
+        info_count: { type: integer }
+        approval_status: { type: string }
+    style_review:
+      type: object
+    security_review:
+      type: object
+    logic_review:
+      type: object
+    human_decision:
+      type: object
+    final_report:
+      type: string
+
+# Workflow nodes define the execution steps
+nodes:
+  # Entry point - validates and prepares input
+  - id: start
+    type: start
+    name: Start Code Review
+    description: Initialize code review workflow
+    config:
+      validate_input: true
+    output_key: workflow_input
+
+  # Parallel execution of all three review types
+  - id: parallel_reviews
+    type: parallel
+    name: Run Parallel Reviews
+    description: Execute style, security, and logic reviews simultaneously
+    config:
+      fail_fast: false
+    branches:
+      - style_check
+      - security_scan
+      - logic_analysis
+
+  # Code style and formatting check using Ollama (fast, local)
+  - id: style_check
+    type: task
+    name: Code Style Check
+    description: Analyze code for style violations and formatting issues
+    config:
+      tool: ollama
+      model: codellama
+      timeout: 120
+    input_mapping:
+      code_path: code_path
+      review_focus: review_focus
+    arguments:
+      prompt: |
+        You are a code style reviewer. Analyze the following code for:
+        1. Naming conventions (variables, functions, classes)
+        2. Code formatting and indentation
+        3. Comment quality and documentation
+        4. Code organization and structure
+        5. Adherence to language-specific style guides
+
+        Code path: {{code_path}}
+
+        Return a JSON object with:
+        - issues: array of {line, severity, message, suggestion}
+        - summary: overall style assessment
+        - score: 0-100 style quality score
+    output_key: style_result
+    max_retries: 2
+    retry_delay: 5.0
+
+  # Security vulnerability scan using Claude Code (thorough analysis)
+  - id: security_scan
+    type: task
+    name: Security Vulnerability Scan
+    description: Deep security analysis for vulnerabilities and risks
+    config:
+      tool: claude_code
+      timeout: 300
+    input_mapping:
+      code_path: code_path
+      pr_number: pr_number
+      repository_url: repository_url
+    arguments:
+      prompt: |
+        Perform a comprehensive security review of the code. Check for:
+
+        1. Injection vulnerabilities (SQL, XSS, Command injection)
+        2. Authentication and authorization issues
+        3. Sensitive data exposure
+        4. Security misconfiguration
+        5. Insecure dependencies or imports
+        6. Cryptographic weaknesses
+        7. Input validation issues
+        8. Error handling that leaks information
+        9. Race conditions and timing attacks
+        10. OWASP Top 10 compliance
+
+        Code path: {{code_path}}
+        PR Number: {{pr_number}}
+
+        Return a detailed JSON report with:
+        - vulnerabilities: array of {id, severity, category, description, location, remediation}
+        - risk_score: overall risk assessment 0-100 (lower is better)
+        - recommendations: priority-ordered list of fixes
+        - compliance: OWASP compliance status
+    output_key: security_result
+    max_retries: 3
+    retry_delay: 10.0
+
+  # Logic and bug detection using Gemini CLI (large context window)
+  - id: logic_analysis
+    type: task
+    name: Logic and Bug Detection
+    description: Analyze code logic for bugs, edge cases, and improvements
+    config:
+      tool: gemini_cli
+      timeout: 240
+    input_mapping:
+      code_path: code_path
+      review_focus: review_focus
+    arguments:
+      prompt: |
+        Analyze the code for logical issues and potential bugs. Examine:
+
+        1. Logic errors and incorrect conditions
+        2. Off-by-one errors and boundary conditions
+        3. Null/undefined handling
+        4. Resource leaks (memory, file handles, connections)
+        5. Concurrency issues (race conditions, deadlocks)
+        6. Error handling completeness
+        7. Edge cases not handled
+        8. Performance anti-patterns
+        9. Code complexity and maintainability
+        10. Test coverage gaps
+
+        Code path: {{code_path}}
+        Focus areas: {{review_focus}}
+
+        Return a JSON report with:
+        - bugs: array of {severity, type, description, location, fix_suggestion}
+        - complexity_score: cyclomatic complexity assessment
+        - maintainability_index: 0-100 score
+        - recommended_tests: suggested test cases to add
+        - refactoring_opportunities: list of improvement suggestions
+    output_key: logic_result
+    max_retries: 2
+    retry_delay: 5.0
+
+  # Wait for all parallel reviews to complete
+  - id: join_reviews
+    type: join
+    name: Collect Review Results
+    description: Wait for all review branches and merge results
+    config:
+      join_mode: all
+      merge_strategy: dict
+      timeout: 600
+    output_key: all_reviews
+
+  # Aggregate and summarize all review findings
+  - id: aggregate_results
+    type: task
+    name: Aggregate Review Comments
+    description: Combine all review results into a unified report
+    config:
+      tool: ollama
+      model: llama3
+      timeout: 60
+    input_mapping:
+      style_result: style_result
+      security_result: security_result
+      logic_result: logic_result
+      severity_threshold: severity_threshold
+    arguments:
+      prompt: |
+        Aggregate the following code review results into a unified summary:
+
+        Style Review: {{style_result}}
+        Security Review: {{security_result}}
+        Logic Review: {{logic_result}}
+
+        Minimum severity threshold: {{severity_threshold}}
+
+        Create a consolidated report with:
+        - total_issues: count of all issues at or above threshold
+        - critical_count: number of critical issues
+        - warning_count: number of warnings
+        - info_count: number of info-level issues
+        - top_issues: the 5 most important issues to address
+        - blocking_issues: any issues that should block merge
+        - recommendation: "approve", "request_changes", or "needs_discussion"
+    output_key: aggregated_summary
+
+  # Check if there are blocking issues
+  - id: check_blocking
+    type: condition
+    name: Check for Blocking Issues
+    description: Determine if review can proceed to human approval
+    conditions:
+      - field: aggregated_summary.blocking_issues
+        operator: "=="
+        value: []
+    true_branch: human_review
+    false_branch: auto_reject
+
+  # Automatic rejection for critical security issues
+  - id: auto_reject
+    type: task
+    name: Auto-Reject Critical Issues
+    description: Automatically fail review for critical blocking issues
+    config:
+      tool: ollama
+      model: llama3
+      timeout: 30
+    arguments:
+      prompt: |
+        Generate a rejection notice for the code review due to blocking issues.
+        Issues: {{aggregated_summary.blocking_issues}}
+
+        Create a clear, actionable message explaining:
+        - Why the review was automatically rejected
+        - What needs to be fixed before re-submission
+        - Priority order for addressing issues
+    output_key: rejection_notice
+
+  # Human review for final approval
+  - id: human_review
+    type: human_review
+    name: Human Review Approval
+    description: Senior developer reviews AI findings and makes final decision
+    config:
+      review_type: approval
+      timeout_hours: 48
+      timeout_action: reject
+      urgency: normal
+    instructions: |
+      Please review the automated code analysis results:
+
+      ## Summary
+      - Total Issues: {{aggregated_summary.total_issues}}
+      - Critical: {{aggregated_summary.critical_count}}
+      - Warnings: {{aggregated_summary.warning_count}}
+
+      ## Top Issues
+      {{aggregated_summary.top_issues}}
+
+      ## AI Recommendation
+      {{aggregated_summary.recommendation}}
+
+      ### Actions
+      - **Approve**: Accept the code with current findings
+      - **Approve with Comments**: Accept but add review comments
+      - **Request Changes**: Require fixes before approval
+      - **Reject**: Decline the submission
+
+      Please provide your decision and any additional comments.
+    required_fields:
+      - decision
+      - comments
+    approve_branch: generate_report
+    reject_branch: final_rejection
+    output_key: human_decision
+
+  # Generate final review report on approval
+  - id: generate_report
+    type: task
+    name: Generate Review Report
+    description: Create final structured review report
+    config:
+      tool: ollama
+      model: llama3
+      timeout: 60
+    input_mapping:
+      style_result: style_result
+      security_result: security_result
+      logic_result: logic_result
+      aggregated_summary: aggregated_summary
+      human_decision: human_decision
+      code_path: code_path
+      pr_number: pr_number
+    arguments:
+      prompt: |
+        Generate a comprehensive code review report in markdown format.
+
+        Include:
+        1. Executive Summary
+        2. Review Details
+           - Style Analysis
+           - Security Findings
+           - Logic Assessment
+        3. Issues Found (by severity)
+        4. Recommendations
+        5. Human Reviewer Notes
+        6. Final Verdict
+
+        Input data:
+        - Style: {{style_result}}
+        - Security: {{security_result}}
+        - Logic: {{logic_result}}
+        - Summary: {{aggregated_summary}}
+        - Human Decision: {{human_decision}}
+        - Code Path: {{code_path}}
+        - PR Number: {{pr_number}}
+    output_key: final_report
+
+  # Handle rejection path
+  - id: final_rejection
+    type: task
+    name: Generate Rejection Report
+    description: Create rejection report with required fixes
+    config:
+      tool: ollama
+      model: llama3
+      timeout: 30
+    input_mapping:
+      aggregated_summary: aggregated_summary
+      human_decision: human_decision
+    arguments:
+      prompt: |
+        Generate a rejection report explaining why the code review was not approved.
+
+        Summary: {{aggregated_summary}}
+        Human Decision: {{human_decision}}
+
+        Include:
+        - Reason for rejection
+        - Required changes
+        - Suggested timeline for resubmission
+    output_key: rejection_report
+
+  # End node - workflow completion
+  - id: end_approved
+    type: end
+    name: Review Approved
+    description: Code review completed with approval
+    config:
+      status: approved
+
+  - id: end_rejected
+    type: end
+    name: Review Rejected
+    description: Code review completed with rejection
+    config:
+      status: rejected
+
+# Edge definitions - workflow graph connections
+edges:
+  # Start to parallel reviews
+  - from: start
+    to: parallel_reviews
+
+  # Parallel review branches
+  - from: parallel_reviews
+    to: style_check
+    branch: style_check
+
+  - from: parallel_reviews
+    to: security_scan
+    branch: security_scan
+
+  - from: parallel_reviews
+    to: logic_analysis
+    branch: logic_analysis
+
+  # Reviews to join
+  - from: style_check
+    to: join_reviews
+
+  - from: security_scan
+    to: join_reviews
+
+  - from: logic_analysis
+    to: join_reviews
+
+  # Join to aggregation
+  - from: join_reviews
+    to: aggregate_results
+
+  # Aggregation to blocking check
+  - from: aggregate_results
+    to: check_blocking
+
+  # Condition branches
+  - from: check_blocking
+    to: human_review
+    condition: true
+
+  - from: check_blocking
+    to: auto_reject
+    condition: false
+
+  # Auto-reject to end
+  - from: auto_reject
+    to: end_rejected
+
+  # Human review outcomes
+  - from: human_review
+    to: generate_report
+    condition: approved
+
+  - from: human_review
+    to: final_rejection
+    condition: rejected
+
+  # Final steps to end
+  - from: generate_report
+    to: end_approved
+
+  - from: final_rejection
+    to: end_rejected
+
+# Entry point for workflow execution
+entry_node: start
+
+# Metadata
+metadata:
+  author: GarageSwarm
+  created: "2024-01-01"
+  category: code_quality
+  tags:
+    - code-review
+    - security
+    - style
+    - multi-agent
+  estimated_duration_minutes: 15
+  cost_estimate: medium

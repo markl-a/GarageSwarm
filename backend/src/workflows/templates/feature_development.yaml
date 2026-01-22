@@ -1,0 +1,477 @@
+# Automated Feature Development Workflow Template
+#
+# This workflow orchestrates the complete feature development lifecycle
+# using multiple AI tools: requirements analysis, technical specification,
+# parallel implementation, testing, and human review gates.
+
+id: feature_development
+name: Automated Feature Development
+description: |
+  End-to-end workflow for automated feature development that coordinates
+  multiple AI agents through planning, implementation, and validation phases.
+  Includes human review checkpoints for quality assurance.
+version: "1.0"
+
+# Input schema defines required parameters for workflow execution
+input_schema:
+  type: object
+  properties:
+    feature_name:
+      type: string
+      description: Name of the feature to be developed
+    requirements:
+      type: string
+      description: Detailed feature requirements and acceptance criteria
+    project_context:
+      type: string
+      description: Additional context about the project (optional)
+    priority:
+      type: string
+      enum: [low, medium, high, critical]
+      default: medium
+      description: Priority level for the feature
+    target_branch:
+      type: string
+      default: main
+      description: Target branch for implementation
+  required:
+    - feature_name
+    - requirements
+
+# Workflow nodes define the execution steps
+nodes:
+  # ============================================
+  # START NODE
+  # ============================================
+  - id: start
+    type: start
+    name: Workflow Start
+    description: Entry point for the feature development workflow
+    output_key: workflow_started
+
+  # ============================================
+  # PHASE 1: PLANNING
+  # ============================================
+  - id: analyze_requirements
+    type: task
+    name: Analyze Requirements
+    description: Use Gemini CLI to analyze and decompose the feature requirements
+    tool_path: gemini_cli.analyze
+    arguments:
+      prompt_template: |
+        Analyze the following feature requirements for {{feature_name}}:
+
+        Requirements:
+        {{requirements}}
+
+        Project Context:
+        {{project_context}}
+
+        Please provide:
+        1. Breakdown of functional requirements
+        2. Non-functional requirements identification
+        3. Technical considerations and constraints
+        4. Potential risks and mitigation strategies
+        5. Estimated complexity (low/medium/high)
+        6. Suggested implementation approach
+      max_tokens: 4096
+    input_mapping:
+      feature_name: feature_name
+      requirements: requirements
+      project_context: project_context
+    output_key: requirements_analysis
+    timeout: 120.0
+    max_retries: 2
+
+  - id: generate_tech_spec
+    type: task
+    name: Generate Technical Specification
+    description: Use Claude Code to generate detailed technical specification
+    tool_path: claude_code.generate
+    arguments:
+      prompt_template: |
+        Based on the requirements analysis, create a detailed technical specification.
+
+        Feature: {{feature_name}}
+
+        Requirements Analysis:
+        {{requirements_analysis}}
+
+        Generate a technical specification that includes:
+        1. Architecture overview
+        2. Data models and schemas
+        3. API endpoints (if applicable)
+        4. Component structure
+        5. Dependencies and integrations
+        6. Security considerations
+        7. Testing strategy
+        8. Implementation milestones
+
+        Format the output as a structured document suitable for development.
+      max_tokens: 8192
+    input_mapping:
+      feature_name: feature_name
+      requirements_analysis: requirements_analysis
+    output_key: technical_spec
+    timeout: 180.0
+    max_retries: 2
+
+  - id: spec_review
+    type: human_review
+    name: Technical Specification Review
+    description: Human review checkpoint for the technical specification
+    review_type: approval
+    instructions: |
+      Please review the technical specification for {{feature_name}}.
+
+      Verify:
+      - Technical approach is sound
+      - Requirements are fully addressed
+      - Architecture aligns with project standards
+      - Security considerations are adequate
+      - Testing strategy is comprehensive
+
+      You may approve, reject, or request modifications.
+    required_fields:
+      - decision
+      - comments
+    timeout_hours: 48.0
+    timeout_action: reject
+    approve_branch: parallel_implementation
+    reject_branch: generate_tech_spec
+    urgency: normal
+    input_mapping:
+      feature_name: feature_name
+      technical_spec: technical_spec
+    output_key: spec_review_result
+
+  # ============================================
+  # PHASE 2: PARALLEL IMPLEMENTATION
+  # ============================================
+  - id: parallel_implementation
+    type: parallel
+    name: Parallel Implementation
+    description: Execute backend, frontend, and test generation in parallel
+    branches:
+      - backend_implementation
+      - frontend_implementation
+      - test_generation
+    fail_fast: false
+
+  - id: backend_implementation
+    type: task
+    name: Backend Implementation
+    description: Use Claude Code to implement backend components
+    tool_path: claude_code.implement
+    arguments:
+      prompt_template: |
+        Implement the backend components for {{feature_name}}.
+
+        Technical Specification:
+        {{technical_spec}}
+
+        Requirements:
+        - Follow the project's coding standards
+        - Implement proper error handling
+        - Add inline documentation
+        - Create database migrations if needed
+        - Implement API endpoints as specified
+
+        Target branch: {{target_branch}}
+
+        Provide the complete implementation with file paths.
+      working_directory: backend/
+      auto_approve: false
+    input_mapping:
+      feature_name: feature_name
+      technical_spec: technical_spec
+      target_branch: target_branch
+    output_key: backend_code
+    timeout: 600.0
+    max_retries: 3
+
+  - id: frontend_implementation
+    type: task
+    name: Frontend Implementation
+    description: Use Claude Code to implement frontend components
+    tool_path: claude_code.implement
+    arguments:
+      prompt_template: |
+        Implement the frontend components for {{feature_name}}.
+
+        Technical Specification:
+        {{technical_spec}}
+
+        Requirements:
+        - Follow Flutter/Dart best practices
+        - Implement responsive design
+        - Add proper state management
+        - Include accessibility features
+        - Create reusable widgets where appropriate
+
+        Target branch: {{target_branch}}
+
+        Provide the complete implementation with file paths.
+      working_directory: frontend/
+      auto_approve: false
+    input_mapping:
+      feature_name: feature_name
+      technical_spec: technical_spec
+      target_branch: target_branch
+    output_key: frontend_code
+    timeout: 600.0
+    max_retries: 3
+
+  - id: test_generation
+    type: task
+    name: Test Generation
+    description: Use Ollama to generate test cases
+    tool_path: ollama.generate
+    arguments:
+      model: codellama
+      prompt_template: |
+        Generate comprehensive test cases for {{feature_name}}.
+
+        Technical Specification:
+        {{technical_spec}}
+
+        Generate:
+        1. Unit tests for backend components
+        2. Widget tests for frontend components
+        3. Integration test scenarios
+        4. Edge cases and error scenarios
+
+        Format: Provide test code files with proper structure and assertions.
+
+        Backend tests should use pytest.
+        Frontend tests should use Flutter test framework.
+    input_mapping:
+      feature_name: feature_name
+      technical_spec: technical_spec
+    output_key: generated_tests
+    timeout: 300.0
+    max_retries: 2
+
+  - id: join_implementation
+    type: join
+    name: Join Implementation Results
+    description: Wait for all parallel implementation branches to complete
+    join_mode: all
+    merge_strategy: dict
+    output_key: implementation_results
+
+  # ============================================
+  # PHASE 3: INTEGRATION AND TESTING
+  # ============================================
+  - id: run_tests
+    type: task
+    name: Run Tests
+    description: Execute the test suite
+    tool_path: shell.execute
+    arguments:
+      commands:
+        - cd backend && pytest --tb=short -v
+        - cd frontend && flutter test
+      capture_output: true
+      timeout: 300
+    input_mapping:
+      implementation_results: implementation_results
+    output_key: test_results
+    timeout: 360.0
+    max_retries: 1
+
+  - id: check_test_results
+    type: condition
+    name: Check Test Results
+    description: Evaluate if tests passed
+    conditions:
+      - field: test_results.exit_code
+        operator: "=="
+        value: 0
+      - field: test_results.all_passed
+        operator: is_true
+    true_branch: final_review
+    false_branch: test_failure_loop
+
+  - id: test_failure_loop
+    type: loop
+    name: Test Failure Resolution Loop
+    description: Attempt to fix failing tests up to 3 times
+    condition:
+      field: test_results.all_passed
+      operator: is_false
+    continue_on_true: true
+    body_node: fix_failing_tests
+    after_loop: escalate_test_failure
+    max_iterations: 3
+
+  - id: fix_failing_tests
+    type: task
+    name: Fix Failing Tests
+    description: Use Claude Code to analyze and fix failing tests
+    tool_path: claude_code.fix
+    arguments:
+      prompt_template: |
+        The following tests are failing for {{feature_name}}:
+
+        Test Output:
+        {{test_results.output}}
+
+        Failed Tests:
+        {{test_results.failures}}
+
+        Please analyze the failures and fix the issues.
+        Provide the corrected code with explanations.
+      auto_approve: false
+    input_mapping:
+      feature_name: feature_name
+      test_results: test_results
+    output_key: test_fixes
+    timeout: 300.0
+    max_retries: 2
+
+  - id: rerun_tests
+    type: task
+    name: Rerun Tests
+    description: Execute tests again after fixes
+    tool_path: shell.execute
+    arguments:
+      commands:
+        - cd backend && pytest --tb=short -v
+        - cd frontend && flutter test
+      capture_output: true
+    output_key: test_results
+    timeout: 360.0
+
+  - id: escalate_test_failure
+    type: human_review
+    name: Escalate Test Failures
+    description: Human intervention required for persistent test failures
+    review_type: input
+    instructions: |
+      Test failures could not be automatically resolved for {{feature_name}}.
+
+      Latest test output:
+      {{test_results.output}}
+
+      Please review and either:
+      1. Provide manual fixes
+      2. Approve to continue anyway (skip failing tests)
+      3. Reject to cancel the workflow
+    required_fields:
+      - decision
+      - manual_fixes
+    timeout_hours: 24.0
+    timeout_action: reject
+    approve_branch: final_review
+    reject_branch: end_failed
+    urgency: high
+    output_key: escalation_result
+
+  # ============================================
+  # PHASE 4: FINAL REVIEW
+  # ============================================
+  - id: final_review
+    type: human_review
+    name: Final Implementation Review
+    description: Final human review before completion
+    review_type: approval
+    instructions: |
+      Final review for {{feature_name}} implementation.
+
+      Implementation Summary:
+      - Backend: {{backend_code.summary}}
+      - Frontend: {{frontend_code.summary}}
+      - Tests: {{test_results.summary}}
+
+      Please verify:
+      - All acceptance criteria are met
+      - Code quality standards are satisfied
+      - Documentation is complete
+      - No security vulnerabilities
+
+      Approve to complete the workflow or reject to request changes.
+    required_fields:
+      - decision
+      - final_comments
+    timeout_hours: 72.0
+    timeout_action: reject
+    approve_branch: end_success
+    reject_branch: generate_tech_spec
+    urgency: normal
+    output_key: final_review_result
+
+  # ============================================
+  # END NODES
+  # ============================================
+  - id: end_success
+    type: end
+    name: Workflow Completed Successfully
+    description: Feature development completed successfully
+    output_key: workflow_completed
+
+  - id: end_failed
+    type: end
+    name: Workflow Failed
+    description: Feature development workflow was cancelled or failed
+    output_key: workflow_failed
+
+# Edge definitions (node connections)
+edges:
+  start:
+    - analyze_requirements
+  analyze_requirements:
+    - generate_tech_spec
+  generate_tech_spec:
+    - spec_review
+  spec_review:
+    - parallel_implementation  # on approve
+    # - generate_tech_spec     # on reject (defined in node)
+  parallel_implementation:
+    - backend_implementation
+    - frontend_implementation
+    - test_generation
+  backend_implementation:
+    - join_implementation
+  frontend_implementation:
+    - join_implementation
+  test_generation:
+    - join_implementation
+  join_implementation:
+    - run_tests
+  run_tests:
+    - check_test_results
+  check_test_results:
+    - final_review           # on true (tests pass)
+    - test_failure_loop      # on false (tests fail)
+  test_failure_loop:
+    - fix_failing_tests      # loop body
+    - escalate_test_failure  # after loop exits
+  fix_failing_tests:
+    - rerun_tests
+  rerun_tests:
+    - check_test_results
+  escalate_test_failure:
+    - final_review           # on approve
+    - end_failed             # on reject
+  final_review:
+    - end_success            # on approve
+    # - generate_tech_spec   # on reject (defined in node)
+
+# Metadata
+metadata:
+  author: GarageSwarm
+  created_at: "2024-01-22"
+  tags:
+    - feature-development
+    - ai-orchestration
+    - multi-agent
+  estimated_duration_hours: 4-24
+  required_tools:
+    - gemini_cli
+    - claude_code
+    - ollama
+  notifications:
+    on_human_review: true
+    on_completion: true
+    on_failure: true

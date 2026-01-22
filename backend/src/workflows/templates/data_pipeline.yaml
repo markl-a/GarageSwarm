@@ -1,0 +1,695 @@
+# Data Analysis Pipeline Workflow Template
+# End-to-end data pipeline with parallel transformation and human review
+
+id: data_pipeline
+name: Data Analysis Pipeline
+description: |
+  End-to-end data analysis workflow that extracts data from various sources,
+  performs parallel transformation operations (cleaning and feature engineering),
+  runs statistical analysis with visualizations, and generates a comprehensive
+  report with human approval gate.
+version: "1.0"
+
+# Input schema defines required and optional parameters
+input_schema:
+  type: object
+  properties:
+    data_source:
+      type: object
+      description: Data source configuration
+      properties:
+        source_type:
+          type: string
+          description: Type of data source (database, api, file, s3)
+          enum: ["database", "api", "file", "s3"]
+        connection_string:
+          type: string
+          description: Connection string or URL for the data source
+        credentials_key:
+          type: string
+          description: Reference to stored credentials (optional)
+        query:
+          type: string
+          description: Query or path to extract data
+        format:
+          type: string
+          description: Data format (csv, json, parquet)
+          default: json
+    analysis_config:
+      type: object
+      description: Configuration for analysis operations
+      properties:
+        include_outlier_detection:
+          type: boolean
+          default: true
+        significance_level:
+          type: number
+          default: 0.05
+        visualization_types:
+          type: array
+          items:
+            type: string
+          default: ["histogram", "scatter", "correlation_matrix"]
+    output_format:
+      type: string
+      description: Desired output format for the report
+      default: pdf
+      enum: ["pdf", "html", "markdown"]
+  required:
+    - data_source
+
+# Output schema defines the structure of the final result
+output_schema:
+  type: object
+  properties:
+    final_report:
+      type: object
+      properties:
+        report_url:
+          type: string
+          description: URL or path to the final report
+        summary:
+          type: string
+          description: Executive summary of the analysis
+        key_findings:
+          type: array
+          description: List of key findings from the analysis
+        visualizations:
+          type: array
+          description: List of generated visualization paths
+    connection_result:
+      type: object
+    extracted_data:
+      type: object
+    transformation_results:
+      type: object
+    statistical_results:
+      type: object
+    review_decision:
+      type: object
+
+# Workflow nodes define the execution steps
+nodes:
+  # ============================================
+  # PHASE 1: Data Extraction
+  # ============================================
+
+  # Entry point - validates and prepares input
+  - id: start
+    type: start
+    name: Start Data Pipeline
+    description: Initialize data analysis workflow and validate input configuration
+    config:
+      validate_input: true
+    output_key: workflow_input
+
+  # Connect to configured data source
+  - id: connect_to_source
+    type: task
+    name: Connect to Data Source
+    description: |
+      Establish connection to the configured data source and validate
+      connectivity before proceeding with extraction.
+    config:
+      tool: claude_code
+      timeout: 120
+    input_mapping:
+      data_source: data_source
+    arguments:
+      prompt: |
+        Connect to the data source and validate the connection.
+        Source configuration: {{data_source}}
+
+        Steps:
+        1. Parse the connection configuration
+        2. Establish connection using appropriate driver/client
+        3. Validate credentials and permissions
+        4. Return connection status and metadata
+
+        Return a JSON object with:
+        - connected: boolean indicating success
+        - source_metadata: information about the data source
+        - available_tables_or_paths: list of accessible data locations
+        - estimated_row_count: approximate data size
+    output_key: connection_result
+    max_retries: 3
+    retry_delay: 5.0
+
+  # Extract and validate data from source
+  - id: extract_validate_data
+    type: task
+    name: Extract and Validate Data
+    description: |
+      Extract data from the source and perform initial validation
+      including schema checks, null handling, and data type verification.
+    config:
+      tool: claude_code
+      timeout: 300
+    input_mapping:
+      connection_result: connection_result
+      data_source: data_source
+    arguments:
+      prompt: |
+        Extract data from the connected source and validate it.
+        Connection: {{connection_result}}
+        Query/Path: {{data_source.query}}
+
+        Steps:
+        1. Execute the data extraction query/operation
+        2. Validate schema and data types
+        3. Check for missing values and anomalies
+        4. Generate data quality report
+        5. Return extracted data with validation summary
+
+        Return a JSON object with:
+        - data: the extracted dataset (or reference to stored data)
+        - schema: column names and types
+        - row_count: number of records
+        - validation_summary:
+          - null_counts: per-column null counts
+          - duplicate_count: number of duplicate rows
+          - data_type_issues: any type mismatches found
+        - validation_issues: list of issues requiring attention
+        - quality_score: 0-100 data quality assessment
+    output_key: extracted_data
+    max_retries: 2
+    retry_delay: 10.0
+
+  # ============================================
+  # PHASE 2: Transformation (Parallel)
+  # ============================================
+
+  # Parallel execution split for transformation
+  - id: transformation_split
+    type: parallel
+    name: Start Parallel Transformation
+    description: Split workflow into parallel data cleaning and feature engineering branches
+    config:
+      fail_fast: false
+    branches:
+      - data_cleaning
+      - feature_engineering
+
+  # Data cleaning using Ollama (local, efficient for repetitive tasks)
+  - id: data_cleaning
+    type: task
+    name: Data Cleaning
+    description: |
+      Clean the extracted data by handling missing values, removing
+      duplicates, fixing inconsistencies, and normalizing formats.
+    config:
+      tool: ollama
+      model: codellama
+      timeout: 600
+    input_mapping:
+      extracted_data: extracted_data
+      analysis_config: analysis_config
+    arguments:
+      prompt: |
+        Perform data cleaning on the extracted dataset.
+        Data summary: {{extracted_data.validation_summary}}
+        Validation issues: {{extracted_data.validation_issues}}
+        Include outlier detection: {{analysis_config.include_outlier_detection}}
+
+        Cleaning operations:
+        1. Handle missing values (imputation strategy based on data type)
+           - Numeric: median imputation
+           - Categorical: mode imputation
+           - Datetime: forward fill
+        2. Remove duplicate records
+        3. Fix data type inconsistencies
+        4. Normalize text fields (trim, case normalization)
+        5. Handle outliers based on analysis config (if enabled)
+           - Identify using IQR method
+           - Flag but do not remove unless extreme
+        6. Generate cleaning report with before/after statistics
+
+        Return a JSON object with:
+        - cleaned_data: reference to cleaned dataset
+        - cleaning_log:
+          - rows_removed: count of removed rows
+          - values_imputed: count of imputed values
+          - outliers_flagged: count of flagged outliers
+          - transformations_applied: list of operations
+        - before_after_stats: comparison metrics
+        - quality_improvement: percentage improvement in quality score
+    output_key: cleaned_data
+    max_retries: 2
+    retry_delay: 5.0
+
+  # Feature engineering using Gemini CLI (large context for complex analysis)
+  - id: feature_engineering
+    type: task
+    name: Feature Engineering
+    description: |
+      Create derived features, perform transformations, and prepare
+      the data for statistical analysis.
+    config:
+      tool: gemini_cli
+      timeout: 600
+    input_mapping:
+      extracted_data: extracted_data
+      analysis_config: analysis_config
+    arguments:
+      prompt: |
+        Perform feature engineering on the extracted dataset.
+        Data schema: {{extracted_data.schema}}
+        Row count: {{extracted_data.row_count}}
+        Analysis goals: {{analysis_config}}
+
+        Feature engineering tasks:
+        1. Create derived numerical features
+           - Ratios between related columns
+           - Rolling aggregations (if time series)
+           - Binned versions of continuous variables
+        2. Encode categorical variables
+           - Label encoding for ordinal
+           - One-hot encoding for nominal (if cardinality < 10)
+        3. Create time-based features if datetime columns exist
+           - Day of week, month, quarter
+           - Time since reference date
+           - Cyclical encoding for periodic features
+        4. Generate interaction features for key variables
+        5. Apply scaling/normalization as needed
+           - StandardScaler for normally distributed
+           - MinMaxScaler for bounded features
+        6. Document all transformations applied
+
+        Return a JSON object with:
+        - engineered_features: list of new feature definitions
+        - feature_importance_hints: initial assessment of potential value
+        - transformations: detailed list of all operations
+        - documentation: human-readable feature descriptions
+        - new_schema: updated column definitions
+    output_key: engineered_features
+    max_retries: 2
+    retry_delay: 5.0
+
+  # Wait for both transformation branches to complete
+  - id: transformation_join
+    type: join
+    name: Merge Transformation Results
+    description: Wait for both transformation branches and merge results
+    config:
+      join_mode: all
+      merge_strategy: dict
+      timeout: 900
+    output_key: transformation_results
+
+  # ============================================
+  # PHASE 3: Analysis
+  # ============================================
+
+  # Statistical analysis using Claude Code (thorough analysis capabilities)
+  - id: statistical_analysis
+    type: task
+    name: Statistical Analysis
+    description: |
+      Perform comprehensive statistical analysis including descriptive
+      statistics, hypothesis testing, and correlation analysis.
+    config:
+      tool: claude_code
+      timeout: 600
+    input_mapping:
+      transformation_results: transformation_results
+      analysis_config: analysis_config
+    arguments:
+      prompt: |
+        Perform statistical analysis on the prepared data.
+        Cleaned data: {{transformation_results.cleaned_data}}
+        Engineered features: {{transformation_results.engineered_features}}
+        Significance level: {{analysis_config.significance_level}}
+
+        Analysis tasks:
+        1. Compute descriptive statistics
+           - Central tendency: mean, median, mode
+           - Dispersion: std, variance, IQR, range
+           - Shape: skewness, kurtosis
+           - Quartiles and percentiles
+        2. Perform distribution analysis
+           - Normality tests (Shapiro-Wilk, K-S test)
+           - Distribution fitting
+        3. Calculate correlation matrix
+           - Pearson for continuous-continuous
+           - Spearman for ordinal
+           - Point-biserial for continuous-binary
+        4. Conduct hypothesis tests at significance level: {{analysis_config.significance_level}}
+           - T-tests for group comparisons
+           - ANOVA for multiple groups
+           - Chi-square for categorical associations
+        5. Identify statistically significant relationships
+        6. Detect patterns and trends
+           - Trend analysis
+           - Seasonality detection (if applicable)
+
+        Return a JSON object with:
+        - descriptive_stats: per-column statistics
+        - distribution_analysis: normality test results
+        - correlation_matrix: pairwise correlations
+        - hypothesis_tests: test results with p-values
+        - significant_findings: list of significant relationships
+        - patterns_detected: identified trends and patterns
+        - interpretations: plain-language explanations
+    output_key: statistical_results
+    max_retries: 2
+    retry_delay: 10.0
+
+  # Generate visualizations
+  - id: generate_visualizations
+    type: task
+    name: Generate Visualizations
+    description: |
+      Create data visualizations including charts, graphs, and
+      interactive plots based on the analysis results.
+    config:
+      tool: claude_code
+      timeout: 300
+    input_mapping:
+      statistical_results: statistical_results
+      analysis_config: analysis_config
+    arguments:
+      prompt: |
+        Generate visualizations for the analysis results.
+        Statistical results: {{statistical_results}}
+        Visualization types requested: {{analysis_config.visualization_types}}
+
+        Visualization tasks:
+        1. Create distribution histograms for key variables
+           - Include KDE overlay
+           - Mark mean/median lines
+        2. Generate scatter plots for highly correlated pairs
+           - Include trend lines
+           - Color by significant grouping variable if available
+        3. Build correlation heatmap
+           - Annotate with correlation values
+           - Highlight significant correlations
+        4. Create trend lines for time series data (if applicable)
+           - Include confidence intervals
+        5. Generate box plots for categorical comparisons
+           - Show outliers
+           - Include significance markers
+        6. Save all visualizations with appropriate labels and legends
+
+        Return a JSON object with:
+        - visualizations: list of {type, title, path, description}
+        - key_visual_insights: notable patterns visible in charts
+        - recommended_charts: additional visualizations that might be useful
+    output_key: visualizations
+    max_retries: 2
+    retry_delay: 5.0
+
+  # ============================================
+  # PHASE 4: Report Generation
+  # ============================================
+
+  # Create comprehensive analysis report using Gemini CLI
+  - id: create_report
+    type: task
+    name: Create Analysis Report
+    description: |
+      Compile all analysis results, visualizations, and insights
+      into a comprehensive, well-formatted report.
+    config:
+      tool: gemini_cli
+      timeout: 600
+    input_mapping:
+      data_source: data_source
+      extracted_data: extracted_data
+      transformation_results: transformation_results
+      statistical_results: statistical_results
+      visualizations: visualizations
+      output_format: output_format
+    arguments:
+      prompt: |
+        Create a comprehensive data analysis report.
+
+        Include the following sections:
+
+        1. EXECUTIVE SUMMARY
+           - Key findings and recommendations (3-5 bullet points)
+           - High-level metrics and outcomes
+           - Critical insights requiring attention
+
+        2. DATA OVERVIEW
+           - Source description: {{data_source}}
+           - Data quality summary: {{extracted_data.validation_summary}}
+           - Record count and time range covered
+
+        3. DATA PREPARATION
+           - Cleaning operations: {{transformation_results.cleaned_data.cleaning_log}}
+           - Feature engineering: {{transformation_results.engineered_features.documentation}}
+           - Data quality improvements achieved
+
+        4. METHODOLOGY
+           - Statistical methods used
+           - Significance level and testing approach
+           - Assumptions and limitations
+
+        5. ANALYSIS RESULTS
+           - Descriptive statistics: {{statistical_results.descriptive_stats}}
+           - Key correlations: {{statistical_results.correlation_matrix}}
+           - Hypothesis test results: {{statistical_results.hypothesis_tests}}
+           - Visualizations: {{visualizations}}
+
+        6. INSIGHTS AND RECOMMENDATIONS
+           - Key patterns identified: {{statistical_results.patterns_detected}}
+           - Actionable recommendations
+           - Areas requiring further investigation
+
+        7. APPENDIX
+           - Detailed statistical tables
+           - All visualizations
+           - Technical notes and data dictionary
+
+        Output format: {{output_format}}
+
+        Generate a professional report suitable for stakeholder review.
+
+        Return a JSON object with:
+        - report_content: the full report content
+        - report_format: the output format used
+        - executive_summary: standalone summary section
+        - key_findings: list of top 5 findings
+        - recommendations: prioritized list of actions
+    output_key: draft_report
+    max_retries: 2
+    retry_delay: 10.0
+
+  # Human review gate for report approval
+  - id: human_review
+    type: human_review
+    name: Report Approval
+    description: |
+      Human review gate for the generated report. Reviewer can approve,
+      request modifications, or reject the report.
+    config:
+      review_type: approval
+      timeout_hours: 48
+      timeout_action: reject
+      urgency: normal
+    instructions: |
+      Please review the generated data analysis report.
+
+      ## Report Summary
+      {{draft_report.executive_summary}}
+
+      ## Key Findings
+      {{draft_report.key_findings}}
+
+      ## Recommendations
+      {{draft_report.recommendations}}
+
+      ## Review Checklist
+      - [ ] Executive summary accurately reflects findings
+      - [ ] Data quality issues are properly documented
+      - [ ] Statistical analysis is sound and appropriate
+      - [ ] Visualizations are clear and informative
+      - [ ] Insights and recommendations are actionable
+      - [ ] Report format and presentation is professional
+
+      ## Actions
+      - **Approve**: Accept the report as final
+      - **Request Changes**: Specific modifications needed (will regenerate)
+      - **Reject**: Report needs major revisions
+
+      Please provide your decision and any feedback.
+    required_fields:
+      - decision
+      - feedback
+    approve_branch: finalize_report
+    reject_branch: create_report
+    output_key: review_decision
+
+  # Check review decision
+  - id: review_condition
+    type: condition
+    name: Check Review Decision
+    description: Route based on human review decision
+    conditions:
+      - field: review_decision.decision
+        operator: "=="
+        value: approved
+    true_branch: finalize_report
+    false_branch: create_report
+
+  # Finalize the report
+  - id: finalize_report
+    type: task
+    name: Finalize Report
+    description: |
+      Apply any final modifications from review and prepare the
+      report for distribution.
+    config:
+      tool: gemini_cli
+      timeout: 300
+    input_mapping:
+      draft_report: draft_report
+      review_decision: review_decision
+      output_format: output_format
+    arguments:
+      prompt: |
+        Finalize the analysis report for distribution.
+
+        Draft report: {{draft_report}}
+        Review feedback: {{review_decision.feedback}}
+        Output format: {{output_format}}
+
+        Tasks:
+        1. Apply any requested modifications from the review feedback
+        2. Add final timestamps and version information
+        3. Generate downloadable format ({{output_format}})
+        4. Create distribution-ready package
+        5. Generate shareable link or file path
+
+        Return a JSON object with:
+        - report_url: path or URL to final report
+        - summary: executive summary text
+        - key_findings: list of key findings
+        - visualizations: list of visualization paths
+        - metadata:
+          - generated_at: timestamp
+          - version: report version
+          - format: output format
+          - approved_by: reviewer info
+    output_key: final_report
+    max_retries: 1
+    retry_delay: 5.0
+
+  # End nodes
+  - id: end_success
+    type: end
+    name: Pipeline Completed
+    description: Data analysis pipeline completed successfully
+    config:
+      status: success
+
+  - id: end_failed
+    type: end
+    name: Pipeline Failed
+    description: Data analysis pipeline failed or was rejected
+    config:
+      status: failed
+
+# Edge definitions - workflow graph connections
+edges:
+  # Start to data extraction
+  - from: start
+    to: connect_to_source
+
+  - from: connect_to_source
+    to: extract_validate_data
+
+  - from: extract_validate_data
+    to: transformation_split
+
+  # Parallel transformation branches
+  - from: transformation_split
+    to: data_cleaning
+    branch: data_cleaning
+
+  - from: transformation_split
+    to: feature_engineering
+    branch: feature_engineering
+
+  # Transformation branches to join
+  - from: data_cleaning
+    to: transformation_join
+
+  - from: feature_engineering
+    to: transformation_join
+
+  # Join to analysis phase
+  - from: transformation_join
+    to: statistical_analysis
+
+  - from: statistical_analysis
+    to: generate_visualizations
+
+  - from: generate_visualizations
+    to: create_report
+
+  # Report to human review
+  - from: create_report
+    to: human_review
+
+  # Human review outcomes
+  - from: human_review
+    to: review_condition
+
+  - from: review_condition
+    to: finalize_report
+    condition: true
+
+  - from: review_condition
+    to: create_report
+    condition: false
+
+  # Final step to end
+  - from: finalize_report
+    to: end_success
+
+# Entry point for workflow execution
+entry_node: start
+
+# Exit nodes
+exit_nodes:
+  - end_success
+  - end_failed
+
+# Metadata
+metadata:
+  author: GarageSwarm
+  created: "2024-01-01"
+  category: data_analysis
+  tags:
+    - data
+    - analysis
+    - etl
+    - pipeline
+    - reporting
+    - multi-agent
+  estimated_duration_minutes: 120
+  cost_estimate: high
+  required_tools:
+    - claude_code
+    - ollama
+    - gemini_cli
+
+# Error handling configuration
+error_handling:
+  default_action: retry
+  max_workflow_retries: 2
+  notification:
+    on_failure: true
+    on_human_review: true
+    channels:
+      - email
+
+# Execution configuration
+execution:
+  timeout: 14400  # 4 hours max
+  priority: normal
+  resource_requirements:
+    min_workers: 1
+    preferred_workers: 2
+    gpu_required: false

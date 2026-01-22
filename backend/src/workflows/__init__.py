@@ -7,6 +7,7 @@ Components:
 - DAG Engine: Graph-based workflow execution
 - Node Types: Task, Condition, Parallel, HumanReview, Loop
 - State: Workflow state management
+- Executor: Node execution with MCP Bus integration
 - Checkpoints: Recovery and persistence
 """
 
@@ -24,6 +25,24 @@ from .nodes import (
 )
 from .state import WorkflowState, WorkflowContext
 from .graph import WorkflowGraph
+from .executor import (
+    NodeExecutor,
+    ExecutionContext,
+    ExecutionMetrics,
+    ExecutorError,
+    TaskExecutionError,
+    ConditionEvaluationError,
+    RouterDecisionError,
+    TimeoutError,
+)
+from .checkpoints import (
+    Checkpoint,
+    CheckpointStore,
+    CheckpointStorageBackend,
+    RedisCheckpointBackend,
+    get_checkpoint_store,
+    create_checkpoint_store,
+)
 
 __all__ = [
     # Node Types
@@ -42,4 +61,20 @@ __all__ = [
     "WorkflowContext",
     # Graph
     "WorkflowGraph",
+    # Executor
+    "NodeExecutor",
+    "ExecutionContext",
+    "ExecutionMetrics",
+    "ExecutorError",
+    "TaskExecutionError",
+    "ConditionEvaluationError",
+    "RouterDecisionError",
+    "TimeoutError",
+    # Checkpoints
+    "Checkpoint",
+    "CheckpointStore",
+    "CheckpointStorageBackend",
+    "RedisCheckpointBackend",
+    "get_checkpoint_store",
+    "create_checkpoint_store",
 ]
